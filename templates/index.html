@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Azure RAG Simulator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="layout">
+    <section class="panel">
+      <h1>Azure RAG Simulator</h1>
+      <p>Upload documents, chat with NVIDIA-hosted LLM, and monitor Azure tier/cost behavior.</p>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Upload Document</h2>
+        <form id="uploadForm">
+          <label>Index Name</label>
+          <input type="text" id="uploadIndexName" placeholder="default-index">
+          <label>File</label>
+          <input type="file" id="uploadFile" required>
+          <button type="submit">Upload</button>
+        </form>
+        <pre id="uploadResult"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Chat</h2>
+        <div class="row">
+          <input type="text" id="chatIndexName" placeholder="default-index">
+          <input type="number" id="topK" value="4" min="1" max="20">
+        </div>
+        <label class="check">
+          <input type="checkbox" id="useSemantic">
+          Use Semantic Ranker (Agentic Retrieval)
+        </label>
+        <textarea id="chatInput" rows="4" placeholder="Ask a question based on uploaded docs..."></textarea>
+        <button id="chatBtn" type="button">Send</button>
+        <pre id="chatResult"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Configuration</h2>
+        <form id="configForm">
+          <label>Azure Tier</label>
+          <select id="azureTier">
+            <option value="FREE">FREE</option>
+            <option value="BASIC">BASIC</option>
+          </select>
+
+          <label>Model</label>
+          <input type="text" id="model" placeholder="meta/llama-3.1-8b-instruct">
+
+          <label>Chunk Size</label>
+          <input type="number" id="chunkSize" value="1000">
+
+          <label>Chunk Overlap</label>
+          <input type="number" id="chunkOverlap" value="200">
+
+          <label>Embedding Dimensions</label>
+          <input type="number" id="embeddingDimensions" value="1536">
+
+          <label>Input Cost / 1K tokens (USD)</label>
+          <input type="number" id="inputCost" step="0.000001" value="0.00015">
+
+          <label>Output Cost / 1K tokens (USD)</label>
+          <input type="number" id="outputCost" step="0.000001" value="0.00060">
+
+          <label>Semantic Query Cost (USD)</label>
+          <input type="number" id="semanticCost" step="0.000001" value="0.001">
+
+          <button type="submit">Save Config</button>
+        </form>
+        <button id="resetBtn" type="button" class="alt">Reset Session</button>
+        <pre id="configResult"></pre>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

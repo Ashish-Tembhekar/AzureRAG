@@ -1,0 +1,92 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background: #f5f7fb;
+  color: #1f2937;
+}
+
+.layout {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #dbe2ea;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #dbe2ea;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+h1, h2 {
+  margin-top: 0;
+}
+
+label {
+  display: block;
+  margin-top: 0.6rem;
+  font-weight: 600;
+}
+
+input, textarea, select, button {
+  width: 100%;
+  margin-top: 0.3rem;
+  border: 1px solid #c7d2df;
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  box-sizing: border-box;
+}
+
+button {
+  margin-top: 0.8rem;
+  background: #0f4c81;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+button.alt {
+  background: #374151;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  gap: 0.6rem;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.check input {
+  width: auto;
+}
+
+pre {
+  background: #0b1220;
+  color: #d2e2ff;
+  border-radius: 8px;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  max-height: 250px;
+  overflow: auto;
+  margin-bottom: 0;
+}
