@@ -5,13 +5,13 @@ from .azure_simulator import (
     UsageTracker,
     get_rag_cost_evaluator,
 )
-from .document_store import InMemoryDocumentStore, get_document_store
+from .document_store import AzureSearchDocumentStore, get_document_store
 from .llm_service import NvidiaLLMService, get_llm_service, normalize_text_for_tts
 
 __all__ = [
     "AzureCapacityMonitor",
     "AzureQuotaExceededError",
-    "InMemoryDocumentStore",
+    "AzureSearchDocumentStore",
     "NvidiaLLMService",
     "RAGCostEvaluator",
     "UsageTracker",

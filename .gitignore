@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 
 venv/
+.semantic_query_counter.json

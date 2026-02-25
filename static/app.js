@@ -1,5 +1,8 @@
 const uploadForm = document.getElementById("uploadForm");
 const uploadResult = document.getElementById("uploadResult");
+const documentsList = document.getElementById("documentsList");
+const refreshDocsBtn = document.getElementById("refreshDocsBtn");
+const deleteDocsBtn = document.getElementById("deleteDocsBtn");
 const chatBtn = document.getElementById("chatBtn");
 const chatResult = document.getElementById("chatResult");
 const configForm = document.getElementById("configForm");
@@ -8,6 +11,51 @@ const resetBtn = document.getElementById("resetBtn");
 
 function showJson(el, obj) {
   el.textContent = JSON.stringify(obj, null, 2);
+}
+
+function currentIndexName() {
+  return document.getElementById("uploadIndexName").value.trim() || "default-index";
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderDocuments(items) {
+  if (!items || items.length === 0) {
+    documentsList.innerHTML = "<div class='doc-meta'>No documents found for this index.</div>";
+    return;
+  }
+  documentsList.innerHTML = items.map((doc) => `
+    <label class="doc-row">
+      <input type="checkbox" class="doc-select" value="${escapeHtml(doc.source_name)}">
+      <div>
+        <div class="doc-name">${escapeHtml(doc.source_name)}</div>
+        <div class="doc-meta">Chunks: ${doc.chunk_count} | Latest: ${escapeHtml(doc.latest_created_at || "-")}</div>
+      </div>
+      <span class="doc-meta">${escapeHtml(doc.index_name)}</span>
+    </label>
+  `).join("");
+}
+
+async function loadDocuments() {
+  const indexName = encodeURIComponent(currentIndexName());
+  const res = await fetch(`/api/documents?index_name=${indexName}`);
+  const data = await res.json();
+  if (!data.ok) {
+    documentsList.innerHTML = `<div class='doc-meta'>Error: ${data.error || "Failed to fetch documents"}</div>`;
+    return;
+  }
+  renderDocuments(data.documents || []);
+}
+
+function selectedSources() {
+  return Array.from(document.querySelectorAll(".doc-select:checked")).map((el) => el.value);
 }
 
 async function loadConfig() {
@@ -34,11 +82,35 @@ uploadForm.addEventListener("submit", async (e) => {
 
   const fd = new FormData();
   fd.append("file", file);
-  fd.append("index_name", document.getElementById("uploadIndexName").value || "default-index");
+  fd.append("index_name", currentIndexName());
 
   const res = await fetch("/api/upload", { method: "POST", body: fd });
   const data = await res.json();
   showJson(uploadResult, data);
+  await loadDocuments();
+});
+
+refreshDocsBtn.addEventListener("click", async () => {
+  await loadDocuments();
+});
+
+deleteDocsBtn.addEventListener("click", async () => {
+  const sourceNames = selectedSources();
+  if (sourceNames.length === 0) {
+    showJson(uploadResult, { ok: false, error: "Select at least one document to delete." });
+    return;
+  }
+  const res = await fetch("/api/documents", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      index_name: currentIndexName(),
+      source_names: sourceNames,
+    }),
+  });
+  const data = await res.json();
+  showJson(uploadResult, data);
+  await loadDocuments();
 });
 
 chatBtn.addEventListener("click", async () => {
@@ -91,4 +163,8 @@ resetBtn.addEventListener("click", async () => {
   showJson(configResult, data);
 });
 
+document.getElementById("uploadIndexName").addEventListener("change", loadDocuments);
+document.getElementById("uploadIndexName").addEventListener("blur", loadDocuments);
+
 loadConfig();
+loadDocuments();

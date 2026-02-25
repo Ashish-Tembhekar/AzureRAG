@@ -63,10 +63,55 @@ button.alt {
   background: #374151;
 }
 
+button.danger {
+  background: #9f1239;
+}
+
 .row {
   display: grid;
   grid-template-columns: 3fr 1fr;
   gap: 0.6rem;
+}
+
+.actions-row {
+  margin-top: 0.8rem;
+}
+
+.documents-list {
+  margin-top: 0.8rem;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 0.5rem;
+  background: #fafcff;
+}
+
+.doc-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  border-bottom: 1px solid #e5edf6;
+  padding: 0.45rem 0.1rem;
+}
+
+.doc-row:last-child {
+  border-bottom: none;
+}
+
+.doc-row input {
+  width: auto;
+  margin: 0;
+}
+
+.doc-name {
+  font-size: 0.92rem;
+}
+
+.doc-meta {
+  color: #4b5563;
+  font-size: 0.8rem;
 }
 
 .check {

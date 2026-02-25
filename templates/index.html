@@ -10,19 +10,24 @@
   <main class="layout">
     <section class="panel">
       <h1>Azure RAG Simulator</h1>
-      <p>Upload documents, chat with NVIDIA-hosted LLM, and monitor Azure tier/cost behavior.</p>
+      <p>Manage documents, chat with NVIDIA-hosted LLM, and monitor Azure tier/cost behavior.</p>
     </section>
 
     <section class="grid">
       <div class="card">
-        <h2>Upload Document</h2>
+        <h2>Documents</h2>
         <form id="uploadForm">
           <label>Index Name</label>
           <input type="text" id="uploadIndexName" placeholder="default-index">
           <label>File</label>
           <input type="file" id="uploadFile" required>
-          <button type="submit">Upload</button>
+          <button type="submit">Add Document</button>
         </form>
+        <div class="row actions-row">
+          <button id="refreshDocsBtn" type="button" class="alt">Refresh List</button>
+          <button id="deleteDocsBtn" type="button" class="danger">Delete Selected</button>
+        </div>
+        <div id="documentsList" class="documents-list"></div>
         <pre id="uploadResult"></pre>
       </div>
 

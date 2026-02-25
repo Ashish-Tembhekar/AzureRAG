@@ -24,6 +24,7 @@ class RuntimeConfig:
     top_k: int = 4
     chat_temperature: float = 0.2
     chat_max_tokens: int = 600
+    use_vector_search: bool = True
     model: str = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct")
 
     def to_dict(self) -> Dict[str, Any]:
@@ -36,6 +37,7 @@ class RuntimeConfig:
             "top_k": self.top_k,
             "chat_temperature": self.chat_temperature,
             "chat_max_tokens": self.chat_max_tokens,
+            "use_vector_search": self.use_vector_search,
             "model": self.model,
             "pricing": {
                 "input_per_1k_tokens_usd": float(os.getenv("AZURE_LLM_INPUT_COST_PER_1K", "0.00015")),
@@ -87,6 +89,8 @@ def _update_config(payload: Dict[str, Any]) -> None:
         runtime_config.default_index = str(payload["default_index"]).strip() or runtime_config.default_index
     if "model" in payload:
         runtime_config.model = str(payload["model"]).strip() or runtime_config.model
+    if "use_vector_search" in payload:
+        runtime_config.use_vector_search = bool(payload["use_vector_search"])
 
     pricing = payload.get("pricing", {})
     if isinstance(pricing, dict):
@@ -153,13 +157,10 @@ def upload_document() -> Any:
             text=text,
             chunk_size=runtime_config.chunk_size,
             overlap=runtime_config.chunk_overlap,
+            vector_dimensions=runtime_config.embedding_dimensions,
         )
         embedding_bytes = len(chunks) * runtime_config.embedding_dimensions * 4
-        cost_summary = evaluator.evaluate_ingestion(
-            index_name=index_name,
-            documents_added=len(chunks),
-            embedding_bytes_added=embedding_bytes,
-        )
+        cost_summary = evaluator.evaluate_ingestion(embedding_bytes_added=embedding_bytes)
         return jsonify(
             {
                 "ok": True,
@@ -176,6 +177,38 @@ def upload_document() -> Any:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.get("/api/documents")
+def list_documents() -> Any:
+    index_name = request.args.get("index_name", runtime_config.default_index).strip() or runtime_config.default_index
+    try:
+        documents = document_store.list_documents(index_name=index_name)
+        return jsonify({"ok": True, "index_name": index_name, "documents": documents})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.delete("/api/documents")
+def delete_documents() -> Any:
+    payload = request.get_json(silent=True) or {}
+    index_name = str(payload.get("index_name", runtime_config.default_index)).strip() or runtime_config.default_index
+    source_names = payload.get("source_names", [])
+    if not isinstance(source_names, list) or not source_names:
+        return jsonify({"ok": False, "error": "source_names list is required"}), 400
+
+    try:
+        deleted = document_store.delete_by_sources(index_name=index_name, source_names=source_names)
+        return jsonify(
+            {
+                "ok": True,
+                "index_name": index_name,
+                "delete_summary": deleted,
+                "store": document_store.stats(),
+            }
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.post("/api/chat")
 def chat() -> Any:
     payload = request.get_json(silent=True) or {}
@@ -186,11 +219,19 @@ def chat() -> Any:
     index_name = str(payload.get("index_name", runtime_config.default_index)).strip() or runtime_config.default_index
     top_k = int(payload.get("top_k", runtime_config.top_k))
     use_semantic_ranker = bool(payload.get("use_semantic_ranker", False))
+    use_vector_search = bool(payload.get("use_vector_search", runtime_config.use_vector_search))
     temperature = float(payload.get("temperature", runtime_config.chat_temperature))
     max_tokens = int(payload.get("max_tokens", runtime_config.chat_max_tokens))
     model = str(payload.get("model", runtime_config.model))
 
-    contexts = document_store.search(query=query, index_name=index_name, top_k=top_k)
+    contexts = document_store.search(
+        query=query,
+        index_name=index_name,
+        top_k=top_k,
+        use_semantic_ranker=use_semantic_ranker,
+        use_vector_search=use_vector_search,
+        vector_dimensions=runtime_config.embedding_dimensions,
+    )
     context_texts = [c.text for c in contexts]
     context_payload = [{"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text} for c in contexts]
 
