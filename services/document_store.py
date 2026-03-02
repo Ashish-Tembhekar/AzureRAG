@@ -61,6 +61,17 @@ class AzureSearchDocumentStore:
         self._capacity_monitor = AzureCapacityMonitor()
 
     @staticmethod
+    def _is_text_like(chunk: str) -> bool:
+        if not chunk:
+            return False
+        total = len(chunk)
+        printable = sum(1 for c in chunk if c.isprintable() or c in "\n\r\t")
+        alpha_num = sum(1 for c in chunk if c.isalnum())
+        printable_ratio = printable / total
+        alpha_num_ratio = alpha_num / total
+        return printable_ratio >= 0.85 and alpha_num_ratio >= 0.15
+
+    @staticmethod
     def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
         clean = " ".join(text.split())
         if not clean:
@@ -72,7 +83,9 @@ class AzureSearchDocumentStore:
         step = max(chunk_size - overlap, 1)
         while start < text_len:
             end = min(start + chunk_size, text_len)
-            chunks.append(clean[start:end])
+            candidate = clean[start:end]
+            if AzureSearchDocumentStore._is_text_like(candidate):
+                chunks.append(candidate)
             if end >= text_len:
                 break
             start += step
@@ -275,12 +288,15 @@ class AzureSearchDocumentStore:
         results = client.search(search_text=query or "*", **search_kwargs)
         payload: List[ChunkRecord] = []
         for item in results:
+            chunk_text = item.get("chunk", "")
+            if not self._is_text_like(chunk_text):
+                continue
             payload.append(
                 ChunkRecord(
                     chunk_id=item["id"],
                     index_name=index_name,
                     source_name=item.get("source_name", ""),
-                    text=item.get("chunk", ""),
+                    text=chunk_text,
                     metadata=item.get("metadata", ""),
                 )
             )
