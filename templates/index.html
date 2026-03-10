@@ -16,6 +16,10 @@
     <section class="grid">
       <div class="card">
         <h2>Documents</h2>
+        <div class="status-bar">
+          <span id="docsStatusDot" class="status-dot idle" aria-hidden="true"></span>
+          <span id="docsStatus" class="status-text">Idle</span>
+        </div>
         <form id="uploadForm">
           <label>Index Name</label>
           <input type="text" id="uploadIndexName" placeholder="default-index">
@@ -33,6 +37,10 @@
 
       <div class="card">
         <h2>Chat</h2>
+        <div class="status-bar">
+          <span id="chatStatusDot" class="status-dot idle" aria-hidden="true"></span>
+          <span id="chatStatus" class="status-text">Idle</span>
+        </div>
         <div class="row">
           <input type="text" id="chatIndexName" placeholder="default-index">
           <input type="number" id="topK" value="4" min="1" max="20">
@@ -48,6 +56,10 @@
 
       <div class="card">
         <h2>Configuration</h2>
+        <div class="status-bar">
+          <span id="configStatusDot" class="status-dot idle" aria-hidden="true"></span>
+          <span id="configStatus" class="status-text">Idle</span>
+        </div>
         <form id="configForm">
           <label>Azure Tier</label>
           <select id="azureTier">

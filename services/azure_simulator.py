@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from azure.core.exceptions import ResourceNotFoundError
+from PyPDF2 import PdfReader
 
 
 class AzureQuotaExceededError(RuntimeError):
@@ -33,6 +34,9 @@ class UsageTracker:
     total_session_cost_usd: float = 0.0
     semantic_queries_used: int = 0
     storage_used_mb: float = 0.0
+    adi_pages_used_this_session: int = 0
+    total_adi_pages_month: int = 0
+    adi_cost_usd: float = 0.0
 
     def as_json_summary(self, query_cost_usd: float, limit_status: str) -> Dict[str, Any]:
         return {
@@ -40,6 +44,9 @@ class UsageTracker:
             "total_session_cost_usd": round(self.total_session_cost_usd, 6),
             "semantic_queries_used": int(self.semantic_queries_used),
             "storage_used_mb": round(self.storage_used_mb, 6),
+            "adi_pages_used_this_session": int(self.adi_pages_used_this_session),
+            "total_adi_pages_month": int(self.total_adi_pages_month),
+            "adi_cost_usd": round(self.adi_cost_usd, 6),
             "limit_status": limit_status,
         }
 
@@ -48,6 +55,7 @@ class AzureCapacityMonitor:
     _instance: Optional["AzureCapacityMonitor"] = None
     _instance_lock = threading.Lock()
 
+    MAX_ADI_PAGES_PER_MONTH = 500
     FREE_LIMITS = TierLimits(
         max_indexes=3,
         max_documents_per_index=1000,
@@ -77,6 +85,9 @@ class AzureCapacityMonitor:
         self._counter_path = Path(".semantic_query_counter.json")
         self._semantic_counter = self._load_semantic_counter()
         self._sync_semantic_usage()
+        self._adi_counter_path = Path(".adi_page_counter.json")
+        self._adi_counter = self._load_adi_counter()
+        self._sync_adi_usage()
         self._initialized = True
 
     @staticmethod
@@ -118,6 +129,28 @@ class AzureCapacityMonitor:
             self._save_semantic_counter()
         self.usage.semantic_queries_used = int(self._semantic_counter.get("count", 0))
 
+    def _load_adi_counter(self) -> Dict[str, Any]:
+        if not self._adi_counter_path.exists():
+            return {"month": self._month_key(), "count": 0}
+        try:
+            payload = json.loads(self._adi_counter_path.read_text(encoding="utf-8"))
+            if "month" not in payload or "count" not in payload:
+                return {"month": self._month_key(), "count": 0}
+            return payload
+        except Exception:
+            return {"month": self._month_key(), "count": 0}
+
+    def _save_adi_counter(self) -> None:
+        self._adi_counter_path.write_text(json.dumps(self._adi_counter), encoding="utf-8")
+
+    def _sync_adi_usage(self) -> None:
+        self._adi_counter = self._load_adi_counter()
+        current = self._month_key()
+        if self._adi_counter.get("month") != current:
+            self._adi_counter = {"month": current, "count": 0}
+            self._save_adi_counter()
+        self.usage.total_adi_pages_month = int(self._adi_counter.get("count", 0))
+
     def refresh_tier(self) -> None:
         with self._lock:
             self._refresh_tier_locked()
@@ -127,6 +160,8 @@ class AzureCapacityMonitor:
             self.usage = UsageTracker()
             self._semantic_counter = {"month": self._month_key(), "count": 0}
             self._save_semantic_counter()
+            self._adi_counter = {"month": self._month_key(), "count": 0}
+            self._save_adi_counter()
 
     def _raise_quota(self, message: str) -> None:
         raise AzureQuotaExceededError(f"[{self.tier}] {message}")
@@ -140,6 +175,8 @@ class AzureCapacityMonitor:
             ratios.append(self.usage.storage_used_mb / limits.max_storage_mb)
         if limits.max_semantic_ranker_queries:
             ratios.append(self.usage.semantic_queries_used / limits.max_semantic_ranker_queries)
+        if self.MAX_ADI_PAGES_PER_MONTH:
+            ratios.append(self.usage.total_adi_pages_month / self.MAX_ADI_PAGES_PER_MONTH)
         if ratios and max(ratios) >= 0.9:
             return "FREE_NEAR_LIMIT"
         return "FREE_OK"
@@ -223,15 +260,70 @@ class AzureCapacityMonitor:
             self._save_semantic_counter()
             self.usage.semantic_queries_used = projected
 
+    @staticmethod
+    def _count_document_pages(file_path: str) -> int:
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Document path not found: {file_path}")
+        if path.suffix.lower() == ".pdf":
+            with path.open("rb") as handle:
+                try:
+                    reader = PdfReader(handle)
+                    if reader.is_encrypted:
+                        try:
+                            reader.decrypt("")
+                        except Exception as exc:
+                            raise ValueError(
+                                "Encrypted PDF detected. Please provide an unencrypted PDF."
+                            ) from exc
+                    return len(reader.pages)
+                except Exception as exc:
+                    raise ValueError(
+                        "Unable to read PDF pages for quota validation. "
+                        "If this PDF is encrypted, install pycryptodome and provide an unencrypted file."
+                    ) from exc
+        return 1
+
+    def verify_adi_page_quota(self, file_path: str) -> int:
+        with self._lock:
+            self._refresh_tier_locked()
+            self._sync_adi_usage()
+            pages = self._count_document_pages(file_path)
+            if pages <= 0:
+                raise ValueError("Document page count could not be determined.")
+            projected = self.usage.total_adi_pages_month + pages
+            if self.tier == "FREE" and projected > self.MAX_ADI_PAGES_PER_MONTH:
+                self._raise_quota(
+                    "Document Intelligence page limit exceeded: "
+                    f"attempted={projected}, max={self.MAX_ADI_PAGES_PER_MONTH}"
+                )
+            return pages
+
     def record_ingestion(self, storage_added_mb: float) -> str:
         with self._lock:
             self.usage.storage_used_mb += storage_added_mb
+            return self._limit_status()
+
+    def register_adi_pages(self, pages: int, adi_cost_usd: float) -> str:
+        with self._lock:
+            self._refresh_tier_locked()
+            self._sync_adi_usage()
+            pages = max(int(pages), 0)
+            if pages:
+                projected = self.usage.total_adi_pages_month + pages
+                self._adi_counter["count"] = projected
+                self._save_adi_counter()
+                self.usage.total_adi_pages_month = projected
+                self.usage.adi_pages_used_this_session += pages
+            self.usage.adi_cost_usd += adi_cost_usd
+            self.usage.total_session_cost_usd += adi_cost_usd
             return self._limit_status()
 
     def register_query(self, query_cost_usd: float) -> str:
         with self._lock:
             self.usage.total_session_cost_usd += query_cost_usd
             self._sync_semantic_usage()
+            self._sync_adi_usage()
             return self._limit_status()
 
 
@@ -251,9 +343,19 @@ class RAGCostEvaluator:
     def evaluate_ingestion(
         self,
         embedding_bytes_added: int,
+        adi_pages_used: int = 0,
     ) -> Dict[str, Any]:
         storage_added_mb = self._bytes_to_mb(embedding_bytes_added)
         limit_status = self.capacity_monitor.record_ingestion(storage_added_mb=storage_added_mb)
+        adi_cost_usd = 0.0
+        if adi_pages_used:
+            self.capacity_monitor.refresh_tier()
+            if self.capacity_monitor.tier == "BASIC":
+                adi_cost_usd = (adi_pages_used / 1000.0) * 10.0
+            limit_status = self.capacity_monitor.register_adi_pages(
+                pages=0,
+                adi_cost_usd=adi_cost_usd,
+            )
         return self.capacity_monitor.usage.as_json_summary(query_cost_usd=0.0, limit_status=limit_status)
 
     def evaluate_query(

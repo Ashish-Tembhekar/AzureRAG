@@ -36,6 +36,51 @@ h1, h2 {
   margin-top: 0;
 }
 
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.35rem 0 0.6rem;
+  font-size: 0.85rem;
+  color: #374151;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #9ca3af;
+  box-shadow: 0 0 0 2px rgba(156, 163, 175, 0.18);
+}
+
+.status-dot.working {
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.18);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-dot.success {
+  background: #10b981;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.18);
+}
+
+.status-dot.error {
+  background: #ef4444;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.18);
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 label {
   display: block;
   margin-top: 0.6rem;
@@ -57,6 +102,11 @@ button {
   color: #fff;
   border: none;
   cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 button.alt {

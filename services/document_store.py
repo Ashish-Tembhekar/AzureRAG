@@ -1,12 +1,15 @@
 import hashlib
+import json
 import math
 import os
 import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import ResourceNotFoundError
 from azure.search.documents import SearchClient
@@ -45,12 +48,20 @@ class ChunkRecord:
 class AzureSearchDocumentStore:
     """Real Azure AI Search-backed document store."""
 
+    ADI_MAX_PAGES_PER_REQUEST = 2
+
     def __init__(self) -> None:
         endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "").strip()
         admin_key = os.getenv("AZURE_SEARCH_ADMIN_KEY", "").strip()
         if not endpoint or not admin_key:
             raise RuntimeError(
                 "AZURE_SEARCH_ENDPOINT and AZURE_SEARCH_ADMIN_KEY must be set in .env."
+            )
+        doc_intel_endpoint = os.getenv("AZURE_DOC_INTEL_ENDPOINT", "").strip()
+        doc_intel_key = os.getenv("AZURE_DOC_INTEL_KEY", "").strip()
+        if not doc_intel_endpoint or not doc_intel_key:
+            raise RuntimeError(
+                "AZURE_DOC_INTEL_ENDPOINT and AZURE_DOC_INTEL_KEY must be set in .env."
             )
 
         self._lock = threading.Lock()
@@ -59,6 +70,10 @@ class AzureSearchDocumentStore:
         self._index_client = SearchIndexClient(endpoint=endpoint, credential=self._credential)
         self._search_clients: Dict[str, SearchClient] = {}
         self._capacity_monitor = AzureCapacityMonitor()
+        self._doc_intel_client = DocumentIntelligenceClient(
+            endpoint=doc_intel_endpoint,
+            credential=AzureKeyCredential(doc_intel_key),
+        )
 
     @staticmethod
     def _is_text_like(chunk: str) -> bool:
@@ -84,6 +99,27 @@ class AzureSearchDocumentStore:
         while start < text_len:
             end = min(start + chunk_size, text_len)
             candidate = clean[start:end]
+            if AzureSearchDocumentStore._is_text_like(candidate):
+                chunks.append(candidate)
+            if end >= text_len:
+                break
+            start += step
+        return chunks
+
+    @staticmethod
+    def chunk_layout_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
+        cleaned = re.sub(r"[ \t]+", " ", text or "").strip()
+        if not cleaned:
+            return []
+        cleaned = "\n".join([line.strip() for line in cleaned.splitlines() if line.strip()])
+
+        chunks: List[str] = []
+        start = 0
+        text_len = len(cleaned)
+        step = max(chunk_size - overlap, 1)
+        while start < text_len:
+            end = min(start + chunk_size, text_len)
+            candidate = cleaned[start:end]
             if AzureSearchDocumentStore._is_text_like(candidate):
                 chunks.append(candidate)
             if end >= text_len:
@@ -125,6 +161,182 @@ class AzureSearchDocumentStore:
     def _safe_doc_key(raw: str) -> str:
         sanitized = re.sub(r"[^A-Za-z0-9_=-]", "-", raw)
         return sanitized[:1024]
+
+    @staticmethod
+    def _infer_content_type(file_path: str) -> Optional[str]:
+        ext = Path(file_path).suffix.lower()
+        mapping = {
+            ".pdf": "application/pdf",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".tif": "image/tiff",
+            ".tiff": "image/tiff",
+            ".bmp": "image/bmp",
+        }
+        return mapping.get(ext)
+
+    def _analyze_layout(self, file_path: str, pages: Optional[str] = None) -> Any:
+        content_type = self._infer_content_type(file_path)
+        with open(file_path, "rb") as handle:
+            if content_type:
+                kwargs = {
+                    "body": handle,
+                    "content_type": content_type,
+                }
+                if pages:
+                    kwargs["pages"] = pages
+                poller = self._doc_intel_client.begin_analyze_document(
+                    "prebuilt-layout",
+                    **kwargs,
+                )
+            else:
+                kwargs = {"body": handle}
+                if pages:
+                    kwargs["pages"] = pages
+                poller = self._doc_intel_client.begin_analyze_document(
+                    "prebuilt-layout",
+                    **kwargs,
+                )
+        return poller.result()
+
+    @staticmethod
+    def _table_to_markdown(table: Any) -> str:
+        rows = [["" for _ in range(table.column_count)] for _ in range(table.row_count)]
+        for cell in table.cells:
+            row = getattr(cell, "row_index", 0)
+            col = getattr(cell, "column_index", 0)
+            content = str(getattr(cell, "content", "") or "").strip()
+            content = content.replace("\n", " ").replace("|", "\\|")
+            if 0 <= row < len(rows) and 0 <= col < len(rows[row]):
+                rows[row][col] = content
+        if not rows:
+            return ""
+        header = rows[0]
+        lines = [
+            "| " + " | ".join(header) + " |",
+            "| " + " | ".join(["---"] * len(header)) + " |",
+        ]
+        for row in rows[1:]:
+            lines.append("| " + " | ".join(row) + " |")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _bounding_page(regions: Any) -> int:
+        if regions:
+            page_number = getattr(regions[0], "page_number", None)
+            if page_number:
+                return int(page_number)
+        return 1
+
+    def _layout_to_sections(self, result: Any) -> List[Dict[str, str]]:
+        head_roles = {
+            "title",
+            "sectionHeading",
+            "sectionTitle",
+            "heading",
+            "header",
+            "chapterTitle",
+        }
+        elements: List[Dict[str, Any]] = []
+        seq = 0
+        for paragraph in getattr(result, "paragraphs", []) or []:
+            text = str(getattr(paragraph, "content", "") or "").strip()
+            if not text:
+                continue
+            role = str(getattr(paragraph, "role", "") or "")
+            page = self._bounding_page(getattr(paragraph, "bounding_regions", None))
+            elements.append(
+                {
+                    "page": page,
+                    "type": "paragraph",
+                    "role": role,
+                    "text": text,
+                    "seq": seq,
+                }
+            )
+            seq += 1
+        for table in getattr(result, "tables", []) or []:
+            markdown = self._table_to_markdown(table)
+            if not markdown:
+                continue
+            page = self._bounding_page(getattr(table, "bounding_regions", None))
+            elements.append(
+                {
+                    "page": page,
+                    "type": "table",
+                    "text": markdown,
+                    "seq": seq,
+                }
+            )
+            seq += 1
+
+        elements.sort(key=lambda item: (item["page"], item["seq"]))
+
+        sections: List[Dict[str, str]] = []
+        current_page = elements[0]["page"] if elements else 1
+        current_title = f"Page {current_page}"
+        buffer: List[str] = []
+
+        def flush() -> None:
+            content = "\n\n".join([part for part in buffer if part]).strip()
+            if content:
+                sections.append({"title": current_title, "text": content})
+
+        for element in elements:
+            page = element["page"]
+            if page != current_page:
+                flush()
+                current_page = page
+                current_title = f"Page {current_page}"
+                buffer = []
+            if element["type"] == "paragraph" and element.get("role") in head_roles:
+                flush()
+                current_title = element["text"].strip() or current_title
+                buffer = []
+                continue
+            buffer.append(element["text"].strip())
+
+        flush()
+
+        if not sections:
+            fallback = str(getattr(result, "content", "") or "").strip()
+            if fallback:
+                sections.append({"title": "Document", "text": fallback})
+        return sections
+
+    @staticmethod
+    def _page_ranges(total_pages: int, per_request: int) -> List[str]:
+        ranges: List[str] = []
+        start = 1
+        while start <= total_pages:
+            end = min(start + per_request - 1, total_pages)
+            if start == end:
+                ranges.append(f"{start}")
+            else:
+                ranges.append(f"{start}-{end}")
+            start = end + 1
+        return ranges
+
+    @staticmethod
+    def _merge_layout_results(results: List[Any]) -> Any:
+        paragraphs: List[Any] = []
+        tables: List[Any] = []
+        content_parts: List[str] = []
+        for result in results:
+            paragraphs.extend(getattr(result, "paragraphs", []) or [])
+            tables.extend(getattr(result, "tables", []) or [])
+            content = str(getattr(result, "content", "") or "").strip()
+            if content:
+                content_parts.append(content)
+
+        class _LayoutAggregate:
+            def __init__(self, paragraphs: List[Any], tables: List[Any], content: str) -> None:
+                self.paragraphs = paragraphs
+                self.tables = tables
+                self.content = content
+
+        return _LayoutAggregate(paragraphs, tables, "\n\n".join(content_parts))
 
     def ensure_index(self, index_name: str, vector_dimensions: int) -> bool:
         try:
@@ -252,6 +464,104 @@ class AzureSearchDocumentStore:
             )
             for d in docs
         ]
+
+    def ingest_document(
+        self,
+        index_name: str,
+        source_name: str,
+        file_path: str,
+        chunk_size: int = 1000,
+        overlap: int = 200,
+        vector_dimensions: int = 1536,
+    ) -> Tuple[List[ChunkRecord], int]:
+        index_name = index_name.strip().lower()
+        created = self.ensure_index(index_name=index_name, vector_dimensions=vector_dimensions)
+
+        adi_pages = self._capacity_monitor.verify_adi_page_quota(file_path)
+        if adi_pages <= self.ADI_MAX_PAGES_PER_REQUEST:
+            layout_results = [self._analyze_layout(file_path)]
+        else:
+            layout_results = [
+                self._analyze_layout(file_path, pages=page_range)
+                for page_range in self._page_ranges(
+                    adi_pages, self.ADI_MAX_PAGES_PER_REQUEST
+                )
+            ]
+        layout_result = self._merge_layout_results(layout_results)
+        self._capacity_monitor.register_adi_pages(pages=adi_pages, adi_cost_usd=0.0)
+
+        sections = self._layout_to_sections(layout_result)
+        if not sections:
+            return [], adi_pages
+
+        docs: List[Dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
+        chunk_number = 0
+        for section in sections:
+            title = section.get("title", "").strip()
+            body = section.get("text", "").strip()
+            if not body:
+                continue
+            combined = f"{title}\n\n{body}".strip() if title else body
+            for chunk in self.chunk_layout_text(
+                text=combined, chunk_size=chunk_size, overlap=overlap
+            ):
+                chunk_number += 1
+                chunk_id = self._safe_doc_key(
+                    f"{index_name}-{source_name}-{chunk_number}-{abs(hash(chunk))}"
+                )
+                metadata = json.dumps(
+                    {"index": index_name, "source": source_name, "section": title},
+                    ensure_ascii=True,
+                )
+                docs.append(
+                    {
+                        "id": chunk_id,
+                        "chunk": chunk,
+                        "source_name": source_name,
+                        "metadata": metadata,
+                        "chunk_number": chunk_number,
+                        "created_at": now.isoformat(),
+                        "content_vector": self._embed_text_deterministic(
+                            text=chunk, dimensions=vector_dimensions
+                        ),
+                    }
+                )
+
+        if not docs:
+            return [], adi_pages
+
+        estimated_storage_mb = (
+            len(docs) * vector_dimensions * 4.0 / (1024.0 * 1024.0)
+        )
+        client = self._search_client(index_name)
+        self._capacity_monitor.preflight_ingestion(
+            index_client=self._index_client,
+            search_client=client,
+            index_name=index_name,
+            documents_added=len(docs),
+            storage_added_mb=estimated_storage_mb,
+            is_new_index=created,
+        )
+
+        result = client.upload_documents(documents=docs)
+        failed = [r for r in result if not r.succeeded]
+        if failed:
+            raise RuntimeError(f"upload_documents failed for {len(failed)} chunks.")
+
+        return (
+            [
+                ChunkRecord(
+                    chunk_id=d["id"],
+                    index_name=index_name,
+                    source_name=source_name,
+                    text=d["chunk"],
+                    metadata=d["metadata"],
+                )
+                for d in docs
+            ],
+            adi_pages,
+        )
 
     def search(
         self,

@@ -1,12 +1,11 @@
 import os
-from io import BytesIO
+import tempfile
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
-from pypdf import PdfReader
 
 from services import (
     AzureQuotaExceededError,
@@ -59,31 +58,15 @@ evaluator = get_rag_cost_evaluator()
 llm_service = get_llm_service()
 
 
-def _read_uploaded_file(uploaded_file) -> str:
+def _save_uploaded_file(uploaded_file) -> str:
     raw = uploaded_file.read()
     if not raw:
         return ""
 
-    file_name = (uploaded_file.filename or "").lower()
-    suffix = Path(file_name).suffix
-
-    if suffix == ".pdf":
-        reader = PdfReader(BytesIO(raw))
-        page_texts: List[str] = []
-        for page in reader.pages:
-            page_texts.append(page.extract_text() or "")
-        text = "\n".join(page_texts).strip()
-        if not text:
-            raise ValueError(
-                "No extractable text found in PDF. This file may be image-only/scanned."
-            )
-        return text
-
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        # Fallback for plain text files with legacy encodings.
-        return raw.decode("latin-1", errors="ignore")
+    suffix = Path(uploaded_file.filename or "").suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
+        handle.write(raw)
+        return handle.name
 
 
 def _update_config(payload: Dict[str, Any]) -> None:
@@ -172,12 +155,15 @@ def upload_document() -> Any:
 
     uploaded = request.files["file"]
     index_name = request.form.get("index_name", runtime_config.default_index).strip() or runtime_config.default_index
+    temp_path = ""
     try:
-        text = _read_uploaded_file(uploaded)
-        chunks = document_store.ingest_text(
+        temp_path = _save_uploaded_file(uploaded)
+        if not temp_path:
+            return jsonify({"ok": False, "error": "Uploaded file is empty."}), 400
+        chunks, adi_pages = document_store.ingest_document(
             index_name=index_name,
             source_name=uploaded.filename or "uploaded_file",
-            text=text,
+            file_path=temp_path,
             chunk_size=runtime_config.chunk_size,
             overlap=runtime_config.chunk_overlap,
             vector_dimensions=runtime_config.embedding_dimensions,
@@ -190,7 +176,10 @@ def upload_document() -> Any:
                 }
             ), 400
         embedding_bytes = len(chunks) * runtime_config.embedding_dimensions * 4
-        cost_summary = evaluator.evaluate_ingestion(embedding_bytes_added=embedding_bytes)
+        cost_summary = evaluator.evaluate_ingestion(
+            embedding_bytes_added=embedding_bytes,
+            adi_pages_used=adi_pages,
+        )
         return jsonify(
             {
                 "ok": True,
@@ -205,6 +194,12 @@ def upload_document() -> Any:
         return jsonify({"ok": False, "error": str(exc)}), 429
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 @app.get("/api/documents")
