@@ -9,6 +9,14 @@ from typing import Any, Dict, Optional
 from azure.core.exceptions import ResourceNotFoundError
 from PyPDF2 import PdfReader
 
+try:
+    from mutagen.wav import WAVE
+    from mutagen.mp3 import MP3
+
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
+
 
 class AzureQuotaExceededError(RuntimeError):
     """Raised when Azure FREE tier capacity constraints are exceeded."""
@@ -24,9 +32,15 @@ class TierLimits:
 
 @dataclass
 class ModelPricing:
-    input_per_1k_tokens_usd: float = float(os.getenv("AZURE_LLM_INPUT_COST_PER_1K", "0.00015"))
-    output_per_1k_tokens_usd: float = float(os.getenv("AZURE_LLM_OUTPUT_COST_PER_1K", "0.00060"))
-    semantic_ranker_per_query_usd: float = float(os.getenv("AZURE_SEMANTIC_QUERY_COST", "0.001"))
+    input_per_1k_tokens_usd: float = float(
+        os.getenv("AZURE_LLM_INPUT_COST_PER_1K", "0.00015")
+    )
+    output_per_1k_tokens_usd: float = float(
+        os.getenv("AZURE_LLM_OUTPUT_COST_PER_1K", "0.00060")
+    )
+    semantic_ranker_per_query_usd: float = float(
+        os.getenv("AZURE_SEMANTIC_QUERY_COST", "0.001")
+    )
 
 
 @dataclass
@@ -37,8 +51,13 @@ class UsageTracker:
     adi_pages_used_this_session: int = 0
     total_adi_pages_month: int = 0
     adi_cost_usd: float = 0.0
+    stt_seconds_used: float = 0.0
+    tts_chars_used: int = 0
+    speech_cost_usd: float = 0.0
 
-    def as_json_summary(self, query_cost_usd: float, limit_status: str) -> Dict[str, Any]:
+    def as_json_summary(
+        self, query_cost_usd: float, limit_status: str
+    ) -> Dict[str, Any]:
         return {
             "query_cost_usd": round(query_cost_usd, 6),
             "total_session_cost_usd": round(self.total_session_cost_usd, 6),
@@ -47,6 +66,9 @@ class UsageTracker:
             "adi_pages_used_this_session": int(self.adi_pages_used_this_session),
             "total_adi_pages_month": int(self.total_adi_pages_month),
             "adi_cost_usd": round(self.adi_cost_usd, 6),
+            "stt_seconds_used": round(self.stt_seconds_used, 2),
+            "tts_chars_used": int(self.tts_chars_used),
+            "speech_cost_usd": round(self.speech_cost_usd, 6),
             "limit_status": limit_status,
         }
 
@@ -56,6 +78,8 @@ class AzureCapacityMonitor:
     _instance_lock = threading.Lock()
 
     MAX_ADI_PAGES_PER_MONTH = 500
+    MAX_STT_SECONDS_MONTH = 18000
+    MAX_TTS_CHARS_MONTH = 500000
     FREE_LIMITS = TierLimits(
         max_indexes=3,
         max_documents_per_index=1000,
@@ -88,6 +112,9 @@ class AzureCapacityMonitor:
         self._adi_counter_path = Path(".adi_page_counter.json")
         self._adi_counter = self._load_adi_counter()
         self._sync_adi_usage()
+        self._speech_counter_path = Path(".speech_usage.json")
+        self._speech_counter = self._load_speech_counter()
+        self._sync_speech_usage()
         self._initialized = True
 
     @staticmethod
@@ -119,7 +146,9 @@ class AzureCapacityMonitor:
             return {"month": self._month_key(), "count": 0}
 
     def _save_semantic_counter(self) -> None:
-        self._counter_path.write_text(json.dumps(self._semantic_counter), encoding="utf-8")
+        self._counter_path.write_text(
+            json.dumps(self._semantic_counter), encoding="utf-8"
+        )
 
     def _sync_semantic_usage(self) -> None:
         self._semantic_counter = self._load_semantic_counter()
@@ -141,7 +170,9 @@ class AzureCapacityMonitor:
             return {"month": self._month_key(), "count": 0}
 
     def _save_adi_counter(self) -> None:
-        self._adi_counter_path.write_text(json.dumps(self._adi_counter), encoding="utf-8")
+        self._adi_counter_path.write_text(
+            json.dumps(self._adi_counter), encoding="utf-8"
+        )
 
     def _sync_adi_usage(self) -> None:
         self._adi_counter = self._load_adi_counter()
@@ -150,6 +181,41 @@ class AzureCapacityMonitor:
             self._adi_counter = {"month": current, "count": 0}
             self._save_adi_counter()
         self.usage.total_adi_pages_month = int(self._adi_counter.get("count", 0))
+
+    def _load_speech_counter(self) -> Dict[str, Any]:
+        if not self._speech_counter_path.exists():
+            return {"month": self._month_key(), "stt_seconds": 0.0, "tts_chars": 0}
+        try:
+            payload = json.loads(self._speech_counter_path.read_text(encoding="utf-8"))
+            if (
+                "month" not in payload
+                or "stt_seconds" not in payload
+                or "tts_chars" not in payload
+            ):
+                return {"month": self._month_key(), "stt_seconds": 0.0, "tts_chars": 0}
+            return payload
+        except Exception:
+            return {"month": self._month_key(), "stt_seconds": 0.0, "tts_chars": 0}
+
+    def _save_speech_counter(self) -> None:
+        self._speech_counter_path.write_text(
+            json.dumps(self._speech_counter), encoding="utf-8"
+        )
+
+    def _sync_speech_usage(self) -> None:
+        self._speech_counter = self._load_speech_counter()
+        current = self._month_key()
+        if self._speech_counter.get("month") != current:
+            self._speech_counter = {
+                "month": current,
+                "stt_seconds": 0.0,
+                "tts_chars": 0,
+            }
+            self._save_speech_counter()
+        self.usage.stt_seconds_used = float(
+            self._speech_counter.get("stt_seconds", 0.0)
+        )
+        self.usage.tts_chars_used = int(self._speech_counter.get("tts_chars", 0))
 
     def refresh_tier(self) -> None:
         with self._lock:
@@ -162,6 +228,12 @@ class AzureCapacityMonitor:
             self._save_semantic_counter()
             self._adi_counter = {"month": self._month_key(), "count": 0}
             self._save_adi_counter()
+            self._speech_counter = {
+                "month": self._month_key(),
+                "stt_seconds": 0.0,
+                "tts_chars": 0,
+            }
+            self._save_speech_counter()
 
     def _raise_quota(self, message: str) -> None:
         raise AzureQuotaExceededError(f"[{self.tier}] {message}")
@@ -174,14 +246,20 @@ class AzureCapacityMonitor:
         if limits.max_storage_mb:
             ratios.append(self.usage.storage_used_mb / limits.max_storage_mb)
         if limits.max_semantic_ranker_queries:
-            ratios.append(self.usage.semantic_queries_used / limits.max_semantic_ranker_queries)
+            ratios.append(
+                self.usage.semantic_queries_used / limits.max_semantic_ranker_queries
+            )
         if self.MAX_ADI_PAGES_PER_MONTH:
-            ratios.append(self.usage.total_adi_pages_month / self.MAX_ADI_PAGES_PER_MONTH)
+            ratios.append(
+                self.usage.total_adi_pages_month / self.MAX_ADI_PAGES_PER_MONTH
+            )
         if ratios and max(ratios) >= 0.9:
             return "FREE_NEAR_LIMIT"
         return "FREE_OK"
 
-    def _preflight_index_creation_locked(self, index_client: Any, index_name: str) -> None:
+    def _preflight_index_creation_locked(
+        self, index_client: Any, index_name: str
+    ) -> None:
         names = list(index_client.list_index_names())
         if index_name not in names and len(names) >= (self.limits.max_indexes or 0):
             self._raise_quota(
@@ -193,7 +271,9 @@ class AzureCapacityMonitor:
             self._refresh_tier_locked()
             if self.tier != "FREE":
                 return
-            self._preflight_index_creation_locked(index_client=index_client, index_name=index_name)
+            self._preflight_index_creation_locked(
+                index_client=index_client, index_name=index_name
+            )
 
     def _get_index_stats(self, index_client: Any, index_name: str) -> tuple[int, float]:
         try:
@@ -228,7 +308,9 @@ class AzureCapacityMonitor:
                 return
 
             if is_new_index:
-                self._preflight_index_creation_locked(index_client=index_client, index_name=index_name)
+                self._preflight_index_creation_locked(
+                    index_client=index_client, index_name=index_name
+                )
 
             _, current_storage_mb = self._get_index_stats(index_client, index_name)
             current_docs = int(search_client.get_document_count())
@@ -251,7 +333,9 @@ class AzureCapacityMonitor:
             self._refresh_tier_locked()
             self._sync_semantic_usage()
             projected = self.usage.semantic_queries_used + 1
-            if self.tier == "FREE" and projected > (self.limits.max_semantic_ranker_queries or 0):
+            if self.tier == "FREE" and projected > (
+                self.limits.max_semantic_ranker_queries or 0
+            ):
                 self._raise_quota(
                     "Semantic ranker query limit exceeded: "
                     f"attempted={projected}, max={self.limits.max_semantic_ranker_queries}"
@@ -326,6 +410,99 @@ class AzureCapacityMonitor:
             self._sync_adi_usage()
             return self._limit_status()
 
+    def verify_stt_quota(self, audio_file_path: str) -> float:
+        if not MUTAGEN_AVAILABLE:
+            raise RuntimeError(
+                "mutagen is not installed. Install it with: pip install mutagen"
+            )
+        with self._lock:
+            self._refresh_tier_locked()
+            self._sync_speech_usage()
+            duration = self._get_audio_duration(audio_file_path)
+            projected = self.usage.stt_seconds_used + duration
+            if self.tier == "FREE" and projected > self.MAX_STT_SECONDS_MONTH:
+                self._raise_quota(
+                    f"STT seconds limit exceeded: attempted={projected:.2f}s, max={self.MAX_STT_SECONDS_MONTH}s"
+                )
+            return duration
+
+    def verify_tts_quota(self, text_string: str) -> int:
+        with self._lock:
+            self._refresh_tier_locked()
+            self._sync_speech_usage()
+            char_count = len(text_string)
+            projected = self.usage.tts_chars_used + char_count
+            if self.tier == "FREE" and projected > self.MAX_TTS_CHARS_MONTH:
+                self._raise_quota(
+                    f"TTS characters limit exceeded: attempted={projected}, max={self.MAX_TTS_CHARS_MONTH}"
+                )
+            return char_count
+
+    def register_stt_usage(self, seconds: float) -> str:
+        with self._lock:
+            self._refresh_tier_locked()
+            self._sync_speech_usage()
+            projected = self.usage.stt_seconds_used + seconds
+            self._speech_counter["stt_seconds"] = projected
+            self._save_speech_counter()
+            self.usage.stt_seconds_used = projected
+            self._calculate_speech_cost()
+            return self._limit_status()
+
+    def register_tts_usage(self, chars: int) -> str:
+        with self._lock:
+            self._refresh_tier_locked()
+            self._sync_speech_usage()
+            projected = self.usage.tts_chars_used + chars
+            self._speech_counter["tts_chars"] = projected
+            self._save_speech_counter()
+            self.usage.tts_chars_used = projected
+            self._calculate_speech_cost()
+            return self._limit_status()
+
+    @staticmethod
+    def _get_audio_duration(file_path: str) -> float:
+        if not MUTAGEN_AVAILABLE:
+            raise RuntimeError("mutagen is not installed")
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Audio file not found: {file_path}")
+        try:
+            if path.suffix.lower() == ".wav":
+                audio = WAVE(str(path))
+            elif path.suffix.lower() in [".mp3", ".mpeg"]:
+                audio = MP3(str(path))
+            else:
+                audio = WAVE(str(path))
+            return float(audio.info.length)
+        except Exception as exc:
+            raise ValueError(f"Unable to determine audio duration: {exc}") from exc
+
+    def _calculate_speech_cost(self) -> None:
+        if self.tier == "BASIC":
+            stt_cost = (self.usage.stt_seconds_used / 3600.0) * 1.00
+            tts_cost = (self.usage.tts_chars_used / 1_000_000.0) * 15.00
+            self.usage.speech_cost_usd = stt_cost + tts_cost
+        else:
+            self.usage.speech_cost_usd = 0.0
+
+    def register_speech_cost(self, stt_seconds: float, tts_chars: int) -> str:
+        with self._lock:
+            self._refresh_tier_locked()
+            self._sync_speech_usage()
+            if stt_seconds > 0:
+                projected_stt = self.usage.stt_seconds_used + stt_seconds
+                self._speech_counter["stt_seconds"] = projected_stt
+                self._save_speech_counter()
+                self.usage.stt_seconds_used = projected_stt
+            if tts_chars > 0:
+                projected_tts = self.usage.tts_chars_used + tts_chars
+                self._speech_counter["tts_chars"] = projected_tts
+                self._save_speech_counter()
+                self.usage.tts_chars_used = projected_tts
+            self._calculate_speech_cost()
+            return self._limit_status()
+
 
 class RAGCostEvaluator:
     def __init__(
@@ -346,7 +523,9 @@ class RAGCostEvaluator:
         adi_pages_used: int = 0,
     ) -> Dict[str, Any]:
         storage_added_mb = self._bytes_to_mb(embedding_bytes_added)
-        limit_status = self.capacity_monitor.record_ingestion(storage_added_mb=storage_added_mb)
+        limit_status = self.capacity_monitor.record_ingestion(
+            storage_added_mb=storage_added_mb
+        )
         adi_cost_usd = 0.0
         if adi_pages_used:
             self.capacity_monitor.refresh_tier()
@@ -356,7 +535,9 @@ class RAGCostEvaluator:
                 pages=0,
                 adi_cost_usd=adi_cost_usd,
             )
-        return self.capacity_monitor.usage.as_json_summary(query_cost_usd=0.0, limit_status=limit_status)
+        return self.capacity_monitor.usage.as_json_summary(
+            query_cost_usd=0.0, limit_status=limit_status
+        )
 
     def evaluate_query(
         self,
@@ -366,7 +547,9 @@ class RAGCostEvaluator:
     ) -> Dict[str, Any]:
         llm_cost = (input_tokens / 1000.0) * self.pricing.input_per_1k_tokens_usd
         llm_cost += (output_tokens / 1000.0) * self.pricing.output_per_1k_tokens_usd
-        semantic_cost = self.pricing.semantic_ranker_per_query_usd if use_semantic_ranker else 0.0
+        semantic_cost = (
+            self.pricing.semantic_ranker_per_query_usd if use_semantic_ranker else 0.0
+        )
         query_cost = llm_cost + semantic_cost
         limit_status = self.capacity_monitor.register_query(query_cost_usd=query_cost)
         return self.capacity_monitor.usage.as_json_summary(

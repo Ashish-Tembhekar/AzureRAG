@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microphone Test</title>
+</head>
+<body>
+    <h1>Microphone Permission Test</h1>
+    <p>Current URL: <span id="currentUrl"></span></p>
+    <p>Protocol: <span id="protocol"></span></p>
+    <p>Is Secure Context: <span id="secure"></span></p>
+    
+    <button id="testBtn">Test Microphone</button>
+    <button id="stopBtn">Stop</button>
+    <p id="status"></p>
+    <audio id="audioPlayback" controls></audio>
+    
+    <script>
+        const currentHostname = window.location.hostname;
+        const currentProtocol = window.location.protocol;
+        const isLocalhost = currentHostname === 'localhost' || currentHostname === '127.0.0.1';
+        const isSecure = window.isSecureContext;
+        
+        document.getElementById('currentUrl').textContent = window.location.href;
+        document.getElementById('protocol').textContent = window.location.protocol;
+        document.getElementById('secure').textContent = isSecure ? 'YES ✓' : 'NO ✗';
+        
+        // Add warning if not secure
+        const warningDiv = document.createElement('div');
+        warningDiv.style.cssText = 'background: #fff3cd; border: 2px solid #ffc107; padding: 1rem; margin: 1rem 0; border-radius: 4px;';
+        if (!isSecure && !isLocalhost) {
+            warningDiv.innerHTML = '<strong>⚠️ WARNING: Insecure Context</strong><br>' +
+                'You are accessing via IP address over HTTP. Browsers block microphone on insecure contexts.<br>' +
+                '<strong>Fix:</strong> Use <code>http://localhost:5000</code> instead, or enable Chrome flag below.';
+            document.body.insertBefore(warningDiv, document.body.firstChild);
+        }
+        
+        let mediaStream = null;
+        
+        document.getElementById('testBtn').addEventListener('click', async () => {
+            const status = document.getElementById('status');
+            status.textContent = 'Checking browser support...';
+            
+            // Check if getUserMedia is supported
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                status.textContent = '✗ Browser does NOT support microphone';
+                status.style.color = 'red';
+                alert('❌ BROWSER NOT SUPPORTED\n\nYour browser doesn\'t support getUserMedia API.\n\nPlease use Chrome, Firefox, Edge, or Safari 11+.');
+                return;
+            }
+            
+            status.textContent = 'Checking secure context...';
+            
+            // Check secure context
+            if (!isSecure && !isLocalhost) {
+                status.textContent = '✗ INSECURE CONTEXT - Microphone blocked by browser';
+                status.style.color = 'red';
+                
+                let message = '❌ INSECURE CONTEXT DETECTED\n\n';
+                message += 'URL: ' + window.location.href + '\n';
+                message += 'Protocol: ' + currentProtocol + ' (UNSECURE)\n';
+                message += 'Hostname: ' + currentHostname + ' (NOT localhost)\n\n';
+                message += 'Browsers block microphone on HTTP for security.\n';
+                message += 'You MUST use localhost or HTTPS.\n\n';
+                message += '✅ QUICK FIX (Chrome):\n';
+                message += '1. Open: chrome://flags/#unsafely-treat-insecure-origin-as-secure\n';
+                message += '2. Search for: "unsafely"\n';
+                message += '3. Enable the flag\n';
+                message += '4. Add your URL: ' + currentProtocol + '//' + currentHostname + ':5000\n';
+                message += '5. Click "Relaunch"\n\n';
+                message += 'Or just use: http://localhost:5000';
+                
+                alert(message);
+                return;
+            }
+            
+            status.textContent = 'Requesting microphone permission...';
+            
+            try {
+                // Request microphone access
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    } 
+                });
+                
+                status.textContent = '✓ Microphone permission GRANTED!';
+                status.style.color = 'green';
+                
+                // Play back the audio to test
+                const audio = document.getElementById('audioPlayback');
+                audio.srcObject = mediaStream;
+                audio.play();
+                
+                status.textContent += ' - Playing audio...';
+                
+                // Stop after 3 seconds
+                setTimeout(() => {
+                    if (mediaStream) {
+                        mediaStream.getTracks().forEach(track => track.stop());
+                    }
+                    status.textContent = '✓ Test complete! Microphone works!';
+                }, 3000);
+                
+            } catch (err) {
+                status.textContent = '✗ Error: ' + err.message;
+                status.style.color = 'red';
+                
+                let helpText = '';
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    helpText = '\n\nYou denied microphone access. Click the lock icon in address bar to allow.';
+                } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                    helpText = '\n\nNo microphone found. Please connect one.';
+                } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+                    helpText = '\n\nMicrophone is busy with another app. Close it and try again.';
+                } else if (window.location.protocol === 'http:' && !isLocalhost) {
+                    helpText = '\n\nHTTP is not secure. Use localhost or HTTPS.';
+                }
+                
+                status.textContent += helpText;
+                alert('Microphone Error: ' + err.message + helpText);
+            }
+        });
+        
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+                document.getElementById('status').textContent = 'Microphone stopped';
+            }
+        });
+    </script>
+    
+    <hr>
+    <h2>HTTPS Setup Instructions</h2>
+    <h3>Option 1: Use ngrok (Recommended for Testing)</h3>
+    <ol>
+        <li>Install ngrok: <code>npm install -g ngrok</code></li>
+        <li>Run: <code>ngrok http 5000</code></li>
+        <li>Use the HTTPS URL provided by ngrok</li>
+    </ol>
+    
+    <h3>Option 2: Chrome Flag (Development Only)</h3>
+    <ol>
+        <li>Open Chrome: <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code></li>
+        <li>Enable the flag</li>
+        <li>Add your IP: <code>http://192.168.0.137:5000</code></li>
+        <li>Relaunch Chrome</li>
+    </ol>
+    
+    <h3>Option 3: Use localhost</h3>
+    <p>Instead of accessing via IP (192.168.0.137), use: <code>http://localhost:5000</code></p>
+    
+    <h3>Option 4: Add HTTPS to Flask (Production)</h3>
+    <pre><code>
+# Install Flask-SSL
+pip install Flask-SSL
+
+# In app.py:
+from flask_ssl import SSL
+ssl = SSL(app)
+app.run(host='0.0.0.0', port=5000, ssl_context='adhoc')
+    </code></pre>
+</body>
+</html>

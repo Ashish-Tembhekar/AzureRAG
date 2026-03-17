@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redirecting to Secure Context...</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 { color: #d32f2f; margin-top: 0; }
+        .success { color: #2e7d32; }
+        .warning { color: #f57c00; }
+        .error { color: #d32f2f; }
+        code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #1976d2;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin: 10px 5px;
+        }
+        .btn:hover { background: #1565c0; }
+        .btn-success { background: #2e7d32; }
+        .btn-success:hover { background: #1b5e20; }
+        pre {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #1976d2;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .flag-box {
+            background: #fff3e0;
+            border: 2px solid #f57c00;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>⚠️ Insecure Context Detected</h1>
+        
+        <div class="info-box">
+            <strong>Current URL:</strong> <code id="currentUrl"></code><br>
+            <strong>Protocol:</strong> <span id="protocol" class="error"></span><br>
+            <strong>Hostname:</strong> <span id="hostname"></span><br>
+            <strong>Secure Context:</strong> <span id="secure"></span>
+        </div>
+        
+        <h2>🔍 What's the Problem?</h2>
+        <p>
+            You're accessing this page over <strong>HTTP</strong> from an <strong>IP address</strong> 
+            instead of <code>localhost</code>. Browsers block microphone access in this scenario for security.
+        </p>
+        
+        <h2>✅ Solution 1: Use Localhost (RECOMMENDED)</h2>
+        <p>
+            The easiest fix is to use <code>localhost</code> instead of your IP address.
+            Browsers treat localhost as a secure context even without HTTPS.
+        </p>
+        <a href="http://localhost:5000" class="btn btn-success">Go to http://localhost:5000</a>
+        <a href="http://127.0.0.1:5000" class="btn btn-success">Or use http://127.0.0.1:5000</a>
+        
+        <h2>🔧 Solution 2: Enable Chrome Flag (Temporary)</h2>
+        <div class="flag-box">
+            <strong>⚠️ For Development Only!</strong> This disables security protections.
+            <ol>
+                <li>Open: <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code></li>
+                <li>Search for: <strong>"unsafely"</strong></li>
+                <li>Click: <strong>"Enabled"</strong></li>
+                <li>In "Insecure origins to treat as secure", add:<br>
+                    <code id="flagUrl"></code></li>
+                <li>Click: <strong>"Relaunch"</strong></li>
+            </ol>
+            <a href="chrome://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" class="btn">Open Chrome Flags</a>
+        </div>
+        
+        <h2>🌐 Solution 3: Use HTTPS (Production)</h2>
+        <p>
+            For production or network access, use HTTPS with a proper SSL certificate.
+            You can use <strong>ngrok</strong> for testing:
+        </p>
+        <pre>
+npm install -g ngrok
+ngrok http 5000
+# Use the https:// URL provided</pre>
+    </div>
+    
+    <script>
+        // Display current URL info
+        const currentUrl = window.location.href;
+        const currentHostname = window.location.hostname;
+        const currentProtocol = window.location.protocol;
+        const isSecure = window.isSecureContext;
+        const isLocalhost = currentHostname === 'localhost' || currentHostname === '127.0.0.1';
+        
+        document.getElementById('currentUrl').textContent = currentUrl;
+        document.getElementById('protocol').textContent = currentProtocol.replace(':', '');
+        document.getElementById('hostname').textContent = currentHostname;
+        document.getElementById('secure').textContent = isSecure ? 'YES ✓' : 'NO ✗';
+        document.getElementById('flagUrl').textContent = currentProtocol + '//' + currentHostname + ':5000';
+        
+        // Color coding
+        document.getElementById('protocol').className = currentProtocol === 'https:' ? 'success' : 'error';
+        
+        // Auto-redirect suggestion
+        if (!isLocalhost) {
+            setTimeout(() => {
+                if (confirm('You are not on localhost. Would you like to go to http://localhost:5000 now?')) {
+                    window.location.href = 'http://localhost:5000';
+                }
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

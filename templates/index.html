@@ -3,99 +3,86 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Azure RAG Simulator</title>
+  <title>Azure RAG Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
-<body>
-  <main class="layout">
-    <section class="panel">
-      <h1>Azure RAG Simulator</h1>
-      <p>Manage documents, chat with NVIDIA-hosted LLM, and monitor Azure tier/cost behavior.</p>
-    </section>
-
-    <section class="grid">
-      <div class="card">
-        <h2>Documents</h2>
-        <div class="status-bar">
-          <span id="docsStatusDot" class="status-dot idle" aria-hidden="true"></span>
-          <span id="docsStatus" class="status-text">Idle</span>
+<body class="theme-shell">
+  <main class="chat-shell">
+    <header class="chat-header">
+      <div class="header-inner">
+        <div>
+          <p class="overline">Active Thread</p>
+          <h1>Azure RAG</h1>
         </div>
-        <form id="uploadForm">
-          <label>Index Name</label>
-          <input type="text" id="uploadIndexName" placeholder="default-index">
-          <label>File</label>
-          <input type="file" id="uploadFile" required>
-          <button type="submit">Add Document</button>
-        </form>
-        <div class="row actions-row">
-          <button id="refreshDocsBtn" type="button" class="alt">Refresh List</button>
-          <button id="deleteDocsBtn" type="button" class="danger">Delete Selected</button>
+        <div class="header-actions">
+          <div class="status-bar">
+            <span id="chatStatusDot" class="status-dot idle" aria-hidden="true"></span>
+            <span id="chatStatus" class="status-text">Idle</span>
+          </div>
+          <a class="icon-btn" href="/settings" aria-label="Open settings">⚙</a>
         </div>
-        <div id="documentsList" class="documents-list"></div>
-        <pre id="uploadResult"></pre>
       </div>
+    </header>
 
-      <div class="card">
-        <h2>Chat</h2>
-        <div class="status-bar">
-          <span id="chatStatusDot" class="status-dot idle" aria-hidden="true"></span>
-          <span id="chatStatus" class="status-text">Idle</span>
+    <section class="chat-stage">
+      <div class="chat-stream">
+        <div class="message system intro-card">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            <p class="tag">System Assistant</p>
+            <p>Use the settings page to upload and manage documents, then ask questions here.</p>
+            <p id="chatConfigHint" class="bubble-meta">Current settings: default-index · top 4 · semantic ranker off.</p>
+          </div>
         </div>
-        <div class="row">
-          <input type="text" id="chatIndexName" placeholder="default-index">
-          <input type="number" id="topK" value="4" min="1" max="20">
+
+        <details class="trace trace-inline">
+          <summary>View Logs</summary>
+          <pre id="chatResult"></pre>
+        </details>
+
+        <div id="chatPromptCard" class="message user hidden">
+          <div class="bubble user-bubble">
+            <p class="tag">User</p>
+            <p id="chatPromptText"></p>
+          </div>
+          <div class="avatar user-avatar">U</div>
         </div>
-        <label class="check">
-          <input type="checkbox" id="useSemantic">
-          Use Semantic Ranker (Agentic Retrieval)
-        </label>
-        <textarea id="chatInput" rows="4" placeholder="Ask a question based on uploaded docs..."></textarea>
-        <button id="chatBtn" type="button">Send</button>
-        <pre id="chatResult"></pre>
-      </div>
 
-      <div class="card">
-        <h2>Configuration</h2>
-        <div class="status-bar">
-          <span id="configStatusDot" class="status-dot idle" aria-hidden="true"></span>
-          <span id="configStatus" class="status-text">Idle</span>
+        <div id="chatThinking" class="message system hidden thinking-row">
+          <div class="avatar">AI</div>
+          <p class="thinking-text">Thinking ...</p>
         </div>
-        <form id="configForm">
-          <label>Azure Tier</label>
-          <select id="azureTier">
-            <option value="FREE">FREE</option>
-            <option value="BASIC">BASIC</option>
-          </select>
 
-          <label>Model</label>
-          <input type="text" id="model" placeholder="meta/llama-3.1-8b-instruct">
+<div id="chatAnswerCard" class="message system hidden">
+<div class="avatar">AI</div>
+<div class="bubble">
+<p class="tag">Assistant</p>
+<p id="chatAnswerText"></p>
+<p id="chatAnswerMeta" class="bubble-meta"></p>
+<div id="chatAnswerAudioContainer" class="tts-audio-container hidden"></div>
+</div>
+</div>
+</div>
 
-          <label>Chunk Size</label>
-          <input type="number" id="chunkSize" value="1000">
+<footer class="chat-composer">
+<div class="composer-box">
+<label class="sr-only" for="chatInput">Message</label>
+<textarea id="chatInput" rows="4" placeholder="Type a message ..."></textarea>
+<div class="composer-controls">
+<button id="speakerToggleBtn" type="button" class="speaker-toggle-btn" aria-label="Toggle TTS" title="Enable audio responses">🔊</button>
+<button id="voiceToggleBtn" type="button" class="voice-toggle-btn" aria-label="Toggle voice mode" title="Toggle voice mode">🎤</button>
+<button id="recordBtn" type="button" class="record-btn hidden" aria-label="Record voice" title="Record voice">🔴</button>
+<button id="chatBtn" type="button" class="send-btn" aria-label="Send message">➤</button>
+</div>
+</div>
+</footer>
+</section>
+</main>
 
-          <label>Chunk Overlap</label>
-          <input type="number" id="chunkOverlap" value="200">
-
-          <label>Embedding Dimensions</label>
-          <input type="number" id="embeddingDimensions" value="1536">
-
-          <label>Input Cost / 1K tokens (USD)</label>
-          <input type="number" id="inputCost" step="0.000001" value="0.00015">
-
-          <label>Output Cost / 1K tokens (USD)</label>
-          <input type="number" id="outputCost" step="0.000001" value="0.00060">
-
-          <label>Semantic Query Cost (USD)</label>
-          <input type="number" id="semanticCost" step="0.000001" value="0.001">
-
-          <button type="submit">Save Config</button>
-        </form>
-        <button id="resetBtn" type="button" class="alt">Reset Session</button>
-        <pre id="configResult"></pre>
-      </div>
-    </section>
-  </main>
-
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Azure RAG Settings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="theme-shell">
+  <div class="settings-shell">
+    <header class="chat-header">
+      <div class="header-inner">
+        <div>
+          <p class="overline">System Settings</p>
+          <h1>Azure RAG</h1>
+        </div>
+        <div class="header-actions">
+          <a class="btn-ghost" href="/">Back to Chat</a>
+        </div>
+      </div>
+    </header>
+
+    <div class="settings-main">
+      <main class="settings-grid">
+      <section class="panel-block">
+        <div class="status-bar compact">
+          <span id="docsStatusDot" class="status-dot idle" aria-hidden="true"></span>
+          <span id="docsStatus" class="status-text">Idle</span>
+        </div>
+        <h2>Documents</h2>
+        <p class="panel-copy">Upload, review, and delete documents for the active index selected in retrieval settings.</p>
+        <form id="uploadForm" class="stack">
+          <label>File</label>
+          <input type="file" id="uploadFile" required>
+          <button type="submit" class="btn-primary">Add Document</button>
+        </form>
+        <div class="row actions-row">
+          <button id="refreshDocsBtn" type="button" class="btn-ghost">Refresh</button>
+          <button id="deleteDocsBtn" type="button" class="btn-danger">Delete</button>
+        </div>
+        <div id="documentsList" class="documents-list"></div>
+        <details class="trace">
+          <summary>Document Log</summary>
+          <pre id="uploadResult"></pre>
+        </details>
+      </section>
+
+      <section class="panel-block">
+        <div class="status-bar compact">
+          <span id="configStatusDot" class="status-dot idle" aria-hidden="true"></span>
+          <span id="configStatus" class="status-text">Idle</span>
+        </div>
+        <h2>Retrieval Settings</h2>
+        <p class="panel-copy">These defaults are used by the chat page, so the composer stays clean and focused.</p>
+        <form id="configForm" class="stack">
+          <label for="defaultIndex">Active Index</label>
+          <input type="text" id="defaultIndex" placeholder="default-index">
+
+          <label for="retrievalTopK">Top K</label>
+          <input type="number" id="retrievalTopK" min="1" max="20" value="4">
+
+          <label class="check card-check" for="defaultSemanticRanker">
+            <input type="checkbox" id="defaultSemanticRanker">
+            <span>
+              <strong>Semantic ranker</strong>
+              <small>Use semantic retrieval for chat requests by default.</small>
+            </span>
+          </label>
+
+          <label>Azure Tier</label>
+          <input type="text" id="azureTier" readonly>
+
+          <label>Model</label>
+          <input type="text" id="model" readonly>
+
+          <div class="row actions-row">
+            <button type="submit" class="btn-primary">Save Settings</button>
+            <button id="resetBtn" type="button" class="btn-ghost">Reset Session</button>
+          </div>
+        </form>
+        <details class="trace">
+          <summary>Config Log</summary>
+          <pre id="configResult"></pre>
+        </details>
+      </section>
+
+<section class="panel-block">
+  <div class="status-bar compact">
+    <span id="ttsStatusDot" class="status-dot idle" aria-hidden="true"></span>
+    <span id="ttsStatus" class="status-text">Idle</span>
+  </div>
+  <h2>TTS (Text-to-Speech) Settings</h2>
+  <p class="panel-copy">Configure voice settings for audio responses. Enable speaker mode in chat to hear responses.</p>
+  <form id="ttsForm" class="stack">
+    <label for="ttsVoice">Voice Profile</label>
+    <select id="ttsVoice">
+      <option value="en-US-AriaNeural">Aria (en-US) - Female</option>
+      <option value="en-US-GuyNeural">Guy (en-US) - Male</option>
+      <option value="en-US-JennyNeural">Jenny (en-US) - Female</option>
+      <option value="en-US-SteffanNeural">Steffan (en-US) - Male</option>
+      <option value="en-US-AriaMultilingualNeural">Aria Multilingual (en-US) - Female</option>
+      <option value="en-US-AndrewMultilingualNeural">Andrew Multilingual (en-US) - Male</option>
+      <option value="en-US-EmmaMultilingualNeural">Emma Multilingual (en-US) - Female</option>
+      <option value="en-GB-SoniaNeural">Sonia (en-GB) - Female</option>
+      <option value="en-GB-RyanNeural">Ryan (en-GB) - Male</option>
+      <option value="de-DE-KatjaNeural">Katja (de-DE) - Female</option>
+      <option value="fr-FR-DeniseNeural">Denise (fr-FR) - Female</option>
+      <option value="es-ES-ElviraNeural">Elvira (es-ES) - Female</option>
+      <option value="it-IT-ElsaNeural">Elsa (it-IT) - Female</option>
+      <option value="jaJP-NanamiNeural">Nanami (ja-JP) - Female</option>
+      <option value="koKR-SunHiNeural">SunHi (ko-KR) - Female</option>
+      <option value="zhCN-XiaoxiaoNeural">Xiaoxiao (zh-CN) - Female</option>
+    </select>
+
+    <label for="ttsSpeed">Speech Speed: <span id="ttsSpeedValue">1.0x</span></label>
+    <input type="range" id="ttsSpeed" min="0.5" max="2.0" step="0.1" value="1.0">
+
+    <label for="ttsPitch">Pitch: <span id="ttsPitchValue">0</span></label>
+    <input type="range" id="ttsPitch" min="-10" max="10" step="1" value="0">
+
+    <label for="ttsStyle">Speaking Style</label>
+    <select id="ttsStyle">
+      <option value="default">Default</option>
+      <option value="cheerful">Cheerful</option>
+      <option value="sad">Sad</option>
+      <option value="angry">Angry</option>
+      <option value="fearful">Fearful</option>
+      <option value="disgruntled">Disgruntled</option>
+      <option value="serious">Serious</option>
+      <option value="assistant">Assistant</option>
+      <option value="newscast">Newscast</option>
+      <option value="narration">Narration</option>
+    </select>
+
+    <div class="row actions-row">
+      <button type="submit" class="btn-primary">Save TTS Settings</button>
+      <button id="testTtsBtn" type="button" class="btn-ghost">Test Voice</button>
+    </div>
+  </form>
+  <details class="trace">
+    <summary>TTS Log</summary>
+    <pre id="ttsResult"></pre>
+  </details>
+</section>
+    </main>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
