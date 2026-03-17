@@ -544,32 +544,32 @@ pre {
 
 .composer-box {
   position: relative;
-  max-width: 680px;
+  max-width: 940px;
   margin: 0 auto;
-  display: flex;
-  align-items: stretch;
+  display: block; /* Changed from flex to block */
 }
 
 .composer-box textarea {
   min-height: 128px;
-  padding: 0.95rem;
+  padding: 0.95rem 180px 0.95rem 0.95rem; /* Make room on the right for buttons */
   font-size: 1rem;
   background: #ffffff;
   border: 2px solid #111111;
-  border-right: none;
-  border-radius: 4px 0 0 4px;
-  flex: 1;
-  max-width: 632px;
+  border-radius: 0px; /* Rounded corners for the whole input box */
+  width: 100%;
+  display: block;
 }
 
 .composer-controls {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 6px; /* Spacing between buttons */
   background: transparent;
   padding: 0;
-  border: 2px solid #111111;
-  border-radius: 0 4px 4px 0;
+  border: none; /* No collective border */
 }
 
 .speaker-toggle-btn,
@@ -577,11 +577,11 @@ pre {
 .record-btn,
 .send-btn {
   background: #f0f0f0;
-  border: none;
-  border-left: 1px solid #111111;
-  width: 44px;
-  height: 44px;
-  font-size: 1.2rem;
+  border: 2px solid #111111; /* Individual boundaries */
+  border-radius: 0px; /* Rounded buttons */
+  width: 40px;
+  height: 40px;
+  font-size: 1.1rem;
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
@@ -595,6 +595,11 @@ pre {
   color: #ffffff;
 }
 
+.record-btn {
+  color: #ff4444;
+  animation: pulse-record 1.5s infinite;
+}
+
 .speaker-toggle-btn:hover,
 .voice-toggle-btn:hover,
 .record-btn:hover {
@@ -604,6 +609,7 @@ pre {
 .speaker-toggle-btn.active {
   background: #111111;
   color: #ffffff;
+  animation: pulse-speaker 2s infinite;
 }
 
 .voice-toggle-btn.active {
@@ -638,122 +644,6 @@ pre {
     }
 }
 
-.composer-box {
-  position: relative;
-  max-width: 680px;
-  margin: 0 auto;
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-}
-
-.composer-input-wrapper {
-  position: relative;
-  flex: 1;
-}
-
-.composer-box textarea {
-  min-height: 128px;
-  padding: 0.95rem 3rem 0.95rem 0.95rem;
-  font-size: 1rem;
-  background: #ffffff;
-  width: 100%;
-}
-
-.composer-controls {
-    position: absolute;
-    right: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    z-index: 10;
-}
-
-.speaker-toggle-btn {
-    background: #f0f0f0;
-    border: 2px solid #111111;
-    border-radius: 50%;
-    width: 36px;
-    height: 36px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.speaker-toggle-btn:hover {
-    background: #e0e0e0;
-}
-
-.speaker-toggle-btn.active {
-    background: #111111;
-    color: #ffffff;
-    animation: pulse-speaker 2s infinite;
-}
-
-@keyframes pulse-speaker {
-    0% {
-        box-shadow: 0 0 0 0 rgba(17, 17, 17, 0.7);
-    }
-    70% {
-        box-shadow: 0 0 0 8px rgba(17, 17, 17, 0);
-    }
-    100% {
-        box-shadow: 0 0 0 0 rgba(17, 17, 17, 0);
-    }
-}
-
-.voice-toggle-btn {
-    background: #f0f0f0;
-    border: 2px solid #111111;
-    border-radius: 50%;
-    width: 36px;
-    height: 36px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.voice-toggle-btn:hover {
-    background: #e0e0e0;
-}
-
-.voice-toggle-btn.active {
-    background: #111111;
-    color: #ffffff;
-}
-
-.record-btn {
-    background: #ff4444;
-    border: 2px solid #111111;
-    border-radius: 50%;
-    width: 36px;
-    height: 36px;
-    font-size: 0.9rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    animation: pulse-record 1.5s infinite;
-}
-
-.send-btn {
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  font-size: 1.1rem;
-  flex-shrink: 0;
-}
 
 .card-check {
   border: 2px solid #111111;
@@ -899,19 +789,16 @@ pre {
   }
 
   .composer-box textarea {
-    border-radius: 4px;
+    border-radius: 0px;
     border: 2px solid #111111;
     max-width: 100%;
     margin-bottom: 0.25rem;
   }
 
   .composer-controls {
-    border-radius: 4px;
+    border-radius: 0px;
     border-left: 2px solid #111111;
   }
 }
 
-.composer-box {
-    max-width: 100%;
-}
-}
+
