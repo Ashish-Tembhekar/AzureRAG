@@ -37,6 +37,7 @@ let isVoiceMode = false;
 let isRecording = false;
 let mediaRecorder = null;
 let audioChunks = [];
+let audioMimeType = "audio/webm";
 let recordingTimer = null;
 const MAX_RECORDING_SECONDS = 60;
 
@@ -720,7 +721,13 @@ async function startRecording() {
             } 
         });
         mediaRecorder = new MediaRecorder(stream);
+        audioMimeType = mediaRecorder.mimeType || "audio/webm";
         audioChunks = [];
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) {
+                audioChunks.push(e.data);
+            }
+        };
         mediaRecorder.ondataavailable = (event) => {
             audioChunks.push(event.data);
         };
@@ -763,13 +770,22 @@ async function startRecording() {
 async function stopRecording() {
     if (!mediaRecorder || !isRecording) return;
     clearInterval(recordingTimer);
-    mediaRecorder.stop();
     mediaRecorder.stream.getTracks().forEach(track => track.stop());
+
+    const audioBlob = await new Promise((resolve) => {
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(audioChunks, { type: audioMimeType });
+            resolve(blob);
+        };
+        mediaRecorder.stop();
+    });
+
     isRecording = false;
     recordBtn.classList.remove("recording");
     recordBtn.textContent = "🔴";
     setStatus(chatStatusDot, chatStatus, "success", "Recording complete");
-    const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+    console.log("[Voice] Chunks:", audioChunks.length, "MIME:", audioMimeType);
+    console.log("[Voice] Blob size:", audioBlob.size, "type:", audioBlob.type);
     await sendVoiceMessage(audioBlob);
 }
 
@@ -778,7 +794,11 @@ async function sendVoiceMessage(audioBlob) {
     setStatus(chatStatusDot, chatStatus, "working", "Processing voice...");
     setBusy([chatBtn], true);
     const formData = new FormData();
-    formData.append("file", audioBlob, "voice.wav");
+    const mimeToExt = { "webm": "webm", "ogg": "ogg", "mp4": "mp4", "wav": "wav", "mpeg": "mp3" };
+    const mimeKey = (audioBlob.type || "").split("/").pop().split(";")[0].trim();
+    const ext = mimeToExt[mimeKey] || "webm";
+    formData.append("file", audioBlob, "voice." + ext);
+    console.log("[Voice] Sending as:", "voice." + ext, "MIME:", audioBlob.type);
     formData.append("index_name", runtimeConfig?.default_index || "default-index");
     formData.append("top_k", String(runtimeConfig?.top_k ?? 4));
     formData.append("use_semantic_ranker", String(Boolean(runtimeConfig?.use_semantic_ranker)));

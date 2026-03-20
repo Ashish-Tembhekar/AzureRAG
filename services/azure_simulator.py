@@ -10,7 +10,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from PyPDF2 import PdfReader
 
 try:
-    from mutagen.wav import WAVE
+    from mutagen.wave import WAVE
     from mutagen.mp3 import MP3
 
     MUTAGEN_AVAILABLE = True
@@ -514,15 +514,20 @@ class AzureCapacityMonitor:
         if not path.exists():
             raise FileNotFoundError(f"Audio file not found: {file_path}")
         try:
-            if path.suffix.lower() == ".wav":
-                audio = WAVE(str(path))
-            elif path.suffix.lower() in [".mp3", ".mpeg"]:
+            if path.suffix.lower() == ".mp3" or path.suffix.lower() == ".mpeg":
                 audio = MP3(str(path))
             else:
                 audio = WAVE(str(path))
             return float(audio.info.length)
-        except Exception as exc:
-            raise ValueError(f"Unable to determine audio duration: {exc}") from exc
+        except Exception:
+            try:
+                audio = MP3(str(path))
+                return float(audio.info.length)
+            except Exception:
+                import os
+
+                file_size = os.path.getsize(file_path)
+                return file_size / (16000 * 2)
 
     def _calculate_speech_cost(self) -> None:
         if self.tier == "BASIC":

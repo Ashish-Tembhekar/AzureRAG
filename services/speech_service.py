@@ -88,12 +88,74 @@ class AzureSpeechService:
         return dict(self.tts_settings)
 
     def transcribe_audio(self, file_path: str) -> str:
-        duration = self.capacity_monitor.verify_stt_quota(file_path)
-        audio_config = speechsdk.AudioConfig(filename=file_path)
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"STT input file: {file_path}, size: {os.path.getsize(file_path)} bytes"
+        )
+
+        wav_path = file_path
+        temp_dir = None
+        if not file_path.lower().endswith(".wav"):
+            import tempfile
+
+            temp_dir = tempfile.mkdtemp()
+            wav_path = os.path.join(temp_dir, "voice.wav")
+            logger.info(f"Converting {file_path} -> {wav_path}")
+            try:
+                from pydub import AudioSegment
+
+                audio = AudioSegment.from_file(file_path)
+                audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+                audio.export(wav_path, format="wav")
+                logger.info(f"pydub conversion done: {os.path.getsize(wav_path)} bytes")
+            except Exception as exc:
+                logger.error(f"pydub conversion failed: {exc}")
+                try:
+                    import subprocess
+
+                    result = subprocess.run(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            file_path,
+                            "-vn",
+                            "-acodec",
+                            "pcm_s16le",
+                            "-ar",
+                            "16000",
+                            "-ac",
+                            "1",
+                            wav_path,
+                        ],
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    logger.info(
+                        f"ffmpeg exit: {result.returncode}, wav size: {os.path.getsize(wav_path)}"
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            f"ffmpeg failed: {result.stderr.decode()[-500:]}"
+                        )
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    raise RuntimeError(f"Audio conversion failed: {e}")
+
+        logger.info(f"STT using: {wav_path} ({os.path.getsize(wav_path)} bytes)")
+        duration = self.capacity_monitor.verify_stt_quota(wav_path)
+        audio_config = speechsdk.AudioConfig(filename=wav_path)
         speech_recognizer = speechsdk.SpeechRecognizer(
-            config=self.speech_config, audio_config=audio_config
+            speech_config=self.speech_config, audio_config=audio_config
         )
         result = speech_recognizer.recognize_once()
+        if temp_dir and os.path.exists(temp_dir):
+            import shutil
+
+            shutil.rmtree(temp_dir, ignore_errors=True)
         if result.reason == speechsdk.ResultReason.RecognizedSpeech:
             self.capacity_monitor.register_stt_usage(duration)
             return result.text

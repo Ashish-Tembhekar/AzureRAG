@@ -514,6 +514,10 @@ def chat_stream() -> Any:
 
 @app.post("/api/voice-chat")
 def voice_chat() -> Any:
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "audio file is required"}), 400
 
@@ -524,9 +528,17 @@ def voice_chat() -> Any:
     temp_audio_path = ""
     try:
         suffix = Path(uploaded_file.filename or "").suffix or ".wav"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
-            handle.write(uploaded_file.read())
-            temp_audio_path = handle.name
+        temp_dir = tempfile.mkdtemp()
+        temp_audio_path = os.path.join(temp_dir, "voice" + suffix)
+        with open(temp_audio_path, "wb") as f:
+            f.write(uploaded_file.read())
+        logger.info(
+            f"Voice chat: filename={uploaded_file.filename}, suffix={suffix}, temp_path={temp_audio_path}, size={os.path.getsize(temp_audio_path)}"
+        )
+        with open(temp_audio_path, "rb") as f:
+            header = f.read(32)
+            logger.info(f"Voice chat: file header hex: {header.hex()}")
+            logger.info(f"Voice chat: file header ascii: {repr(header[:16])}")
 
         if not temp_audio_path or not os.path.exists(temp_audio_path):
             return jsonify({"ok": False, "error": "Failed to save audio file."}), 500
@@ -616,11 +628,15 @@ def voice_chat() -> Any:
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
     finally:
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            try:
-                os.remove(temp_audio_path)
-            except OSError:
-                pass
+        if temp_audio_path:
+            temp_dir = os.path.dirname(temp_audio_path)
+            if os.path.exists(temp_dir):
+                try:
+                    import shutil
+
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except OSError:
+                    pass
 
 
 @app.post("/api/chat-with-tts")
