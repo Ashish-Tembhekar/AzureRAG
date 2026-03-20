@@ -165,36 +165,51 @@ function applyConfig(config) {
 }
 
 function renderPendingChat(query) {
-  setText(chatPromptText, query);
-  toggleHidden(chatPromptCard, false);
-  toggleHidden(chatThinking, false);
-  toggleHidden(chatAnswerCard, true);
-  if (chatAnswerCard) {
-    chatAnswerCard.classList.remove("error-state");
+  const stream = getChatStream();
+  if (!stream) return;
+
+  let thinking = document.getElementById("chatThinking");
+  if (!thinking) {
+    thinking = document.createElement("div");
+    thinking.id = "chatThinking";
+    thinking.className = "message system hidden thinking-row";
+    thinking.innerHTML = '<div class="avatar">AI</div><p class="thinking-text">Thinking ...</p>';
+    stream.appendChild(thinking);
+  }
+  thinking.classList.remove("hidden");
+
+  let answerCard = document.getElementById("chatAnswerCard");
+  if (answerCard) {
+    answerCard.classList.add("hidden");
+    answerCard.classList.remove("error-state");
   }
 }
 
 function renderChatResponse(answer, meta, audioBase64 = null, isError = false) {
-    if (chatAnswerText) {
-        chatAnswerText.innerHTML = marked.parse(answer);
-    }
-    setText(chatAnswerMeta, meta);
-    toggleHidden(chatThinking, true);
-    toggleHidden(chatAnswerCard, false);
-    if (chatAnswerCard) {
-        chatAnswerCard.classList.toggle("error-state", isError);
+    const stream = getChatStream();
+    if (!stream) return;
+
+    const thinking = document.getElementById("chatThinking");
+    if (thinking) thinking.classList.add("hidden");
+
+    let answerCard = document.getElementById("chatAnswerCard");
+    if (!answerCard) {
+      answerCard = document.createElement("div");
+      answerCard.id = "chatAnswerCard";
+      answerCard.className = "message system hidden";
+      answerCard.innerHTML = '<div class="avatar">AI</div><div class="bubble"><p class="tag">Assistant</p><p id="chatAnswerText"></p><p id="chatAnswerMeta" class="bubble-meta"></p></div>';
+      stream.appendChild(answerCard);
     }
     
-    if (chatAnswerAudioContainer) {
-        chatAnswerAudioContainer.innerHTML = '';
-        chatAnswerAudioContainer.classList.add("hidden");
-    }
+    const chatAnswerText = document.getElementById("chatAnswerText");
+    const chatAnswerMeta = document.getElementById("chatAnswerMeta");
     
-    if (chatAnswerAudioContainer && audioBase64 && isSpeakerEnabled) {
-        const audioSrc = `data:audio/wav;base64,${audioBase64}`;
-        chatAnswerAudioContainer.innerHTML = `<audio src="${audioSrc}" controls></audio>`;
-        chatAnswerAudioContainer.classList.remove("hidden");
-    }
+    if (chatAnswerText) chatAnswerText.innerHTML = marked.parse(answer);
+    if (chatAnswerMeta) chatAnswerMeta.textContent = meta || "";
+    answerCard.classList.remove("hidden");
+    answerCard.classList.toggle("error-state", isError);
+
+    stream.scrollTop = stream.scrollHeight;
 }
 
 async function loadConfig() {
@@ -313,6 +328,16 @@ if (deleteDocsBtn) {
   });
 }
 
+const chatInput = document.getElementById("chatInput");
+if (chatInput) {
+    chatInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            chatBtn?.click();
+        }
+    });
+}
+
 if (chatBtn) {
     chatBtn.addEventListener("click", async () => {
         const query = document.getElementById("chatInput").value.trim();
@@ -329,22 +354,53 @@ if (chatBtn) {
             index_name: runtimeConfig?.default_index || "default-index",
             top_k: Number(runtimeConfig?.top_k ?? 4),
             use_semantic_ranker: Boolean(runtimeConfig?.use_semantic_ranker),
+            session_id: activeSessionId || undefined,
         };
+        console.log("[Chat] Sending:", payload);
         try {
             const res = await fetch("/api/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
+            console.log("[Chat] Response status:", res.status);
+            if (!res.ok) {
+                throw new Error("HTTP " + res.status + ": " + res.statusText);
+            }
             const data = await res.json();
+            console.log("[Chat] Response data:", data);
             showJson(chatResult, data);
             if (data.ok) {
                 const contexts = Array.isArray(data.contexts) ? data.contexts.length : 0;
-                const modelName = data.model ? ` · ${data.model}` : "";
-                
-                renderChatResponse(data.answer || "No answer returned.", `${contexts} contexts${modelName}`, null);
-                setStatus(chatStatusDot, chatStatus, "success", `Answer ready (${contexts} contexts)`);
-                
+                const modelName = data.model ? " · " + data.model : "";
+
+                if (data.session_id && data.session_id !== activeSessionId) {
+                    activeSessionId = data.session_id;
+                    localStorage.setItem("rag_session_id", data.session_id);
+                    loadSessions();
+                }
+
+                currentMessages.push({ role: "user", content: query });
+                currentMessages.push({ role: "assistant", content: data.answer || "" });
+
+                const stream = getChatStream();
+                if (stream) {
+                    const thinking = document.getElementById("chatThinking");
+                    if (thinking) thinking.classList.add("hidden");
+
+                    const userEl = document.createElement("div");
+                    userEl.className = "message user";
+                    userEl.innerHTML = '<div class="bubble user-bubble"><p class="tag">User</p><p>' + escapeHtml(query) + '</p></div><div class="avatar user-avatar">U</div>';
+                    stream.appendChild(userEl);
+                }
+
+                appendMessage("assistant", data.answer || "", data.cost_summary);
+
+                const meta = document.getElementById("chatAnswerMeta");
+                if (meta) meta.textContent = contexts + " contexts" + modelName;
+
+                setStatus(chatStatusDot, chatStatus, "success", "Answer ready (" + contexts + " contexts)");
+
                 if (isSpeakerEnabled && data.answer) {
                     setStatus(chatStatusDot, chatStatus, "working", "Generating audio...");
                     try {
@@ -356,29 +412,26 @@ if (chatBtn) {
                         const ttsData = await ttsRes.json();
                         if (ttsData.ok && ttsData.audio) {
                             updateChatAudio(ttsData.audio);
-                            setStatus(chatStatusDot, chatStatus, "success", `Answer ready with audio (${contexts} contexts)`);
+                            setStatus(chatStatusDot, chatStatus, "success", "Answer ready with audio (" + contexts + " contexts)");
                         } else {
-                            console.error("TTS generation failed:", ttsData.error);
-                            setStatus(chatStatusDot, chatStatus, "success", `Answer ready (${contexts} contexts) - audio failed`);
+                            console.error("[Chat] TTS generation failed:", ttsData.error);
+                            setStatus(chatStatusDot, chatStatus, "success", "Answer ready (" + contexts + " contexts) - audio failed");
                         }
                     } catch (ttsErr) {
-                        console.error("TTS error:", ttsErr);
-                        setStatus(chatStatusDot, chatStatus, "success", `Answer ready (${contexts} contexts)`);
+                        console.error("[Chat] TTS error:", ttsErr);
+                        setStatus(chatStatusDot, chatStatus, "success", "Answer ready (" + contexts + " contexts)");
                     }
                 }
             } else {
-                renderChatResponse(data.error || "Chat failed", "Request failed", true);
-                setStatus(
-                    chatStatusDot,
-                    chatStatus,
-                    "error",
-                    data.error ? `Chat failed: ${data.error}` : "Chat failed"
-                );
+                console.error("[Chat] API error:", data.error);
+                renderChatResponse(data.error || "Chat failed", "Request failed", null, true);
+                setStatus(chatStatusDot, chatStatus, "error", data.error ? "Chat failed: " + data.error : "Chat failed");
             }
         } catch (err) {
+            console.error("[Chat] Request error:", err);
             showJson(chatResult, { ok: false, error: err.message || "Chat failed" });
-            renderChatResponse(err.message || "Chat failed", "Request failed", true);
-            setStatus(chatStatusDot, chatStatus, "error", "Chat failed");
+            renderChatResponse(err.message || "Chat failed", "Request failed", null, true);
+            setStatus(chatStatusDot, chatStatus, "error", "Chat failed: " + (err.message || "Unknown error"));
         } finally {
             setBusy([chatBtn], false);
         }
@@ -588,26 +641,49 @@ async function sendVoiceMessage(audioBlob) {
     formData.append("temperature", String(runtimeConfig?.chat_temperature ?? 0.2));
     formData.append("max_tokens", String(runtimeConfig?.chat_max_tokens ?? 600));
     formData.append("model", runtimeConfig?.model || "");
+    if (activeSessionId) formData.append("session_id", activeSessionId);
+    console.log("[Voice] Sending voice message for session:", activeSessionId);
     try {
         const res = await fetch("/api/voice-chat", {
             method: "POST",
             body: formData,
         });
+        console.log("[Voice] Response status:", res.status);
         const data = await res.json();
+        console.log("[Voice] Response data:", data);
         showJson(chatResult, data);
         if (data.ok) {
             const contexts = Array.isArray(data.contexts) ? data.contexts.length : 0;
-            const modelName = data.model ? ` · ${data.model}` : "";
-            renderChatResponse(data.answer || "No answer returned.", `${contexts} contexts${modelName}`);
-            setStatus(chatStatusDot, chatStatus, "success", `Voice response ready (${contexts} contexts)`);
+            const modelName = data.model ? " · " + data.model : "";
+
+            if (data.session_id && data.session_id !== activeSessionId) {
+                activeSessionId = data.session_id;
+                localStorage.setItem("rag_session_id", data.session_id);
+                loadSessions();
+            }
+
+            const stream = getChatStream();
+            if (stream) {
+                const thinking = document.getElementById("chatThinking");
+                if (thinking) thinking.classList.add("hidden");
+            }
+
+            appendMessage("assistant", data.answer || "", data.cost_summary);
+
+            const meta = document.getElementById("chatAnswerMeta");
+            if (meta) meta.textContent = contexts + " contexts" + modelName;
+
+            setStatus(chatStatusDot, chatStatus, "success", "Voice response ready (" + contexts + " contexts)");
         } else {
-            renderChatResponse(data.error || "Voice chat failed", "Request failed", true);
-            setStatus(chatStatusDot, chatStatus, "error", data.error ? `Voice failed: ${data.error}` : "Voice failed");
+            console.error("[Voice] API error:", data.error);
+            renderChatResponse(data.error || "Voice chat failed", "Request failed", null, true);
+            setStatus(chatStatusDot, chatStatus, "error", data.error ? "Voice failed: " + data.error : "Voice failed");
         }
     } catch (err) {
+        console.error("[Voice] Request error:", err);
         showJson(chatResult, { ok: false, error: err.message || "Voice chat failed" });
-        renderChatResponse(err.message || "Voice chat failed", "Request failed", true);
-        setStatus(chatStatusDot, chatStatus, "error", "Voice chat failed");
+        renderChatResponse(err.message || "Voice chat failed", "Request failed", null, true);
+        setStatus(chatStatusDot, chatStatus, "error", "Voice chat failed: " + (err.message || "Unknown error"));
     } finally {
         setBusy([chatBtn], false);
     }
@@ -663,6 +739,9 @@ async function initializeApp() {
     if (speakerToggleBtn) {
         speakerToggleBtn.classList.remove("active");
     }
+    if (activeSessionId) {
+        await switchSession(activeSessionId);
+    }
 }
 
 initializeApp();
@@ -678,6 +757,378 @@ const ttsPitch = document.getElementById("ttsPitch");
 const ttsPitchValue = document.getElementById("ttsPitchValue");
 const ttsStyle = document.getElementById("ttsStyle");
 const testTtsBtn = document.getElementById("testTtsBtn");
+
+// === SESSION MANAGEMENT ===
+let activeSessionId = localStorage.getItem("rag_session_id") || null;
+let sessions = [];
+let currentMessages = [];
+
+function getSidebar() { return document.getElementById("sessionsSidebar"); }
+function getSessionsList() { return document.getElementById("sessionsList"); }
+function getChatShell() { return document.getElementById("chatShell"); }
+function getChatStream() { return document.querySelector(".chat-stream"); }
+function getActiveSessionLabel() { return document.getElementById("activeSessionLabel"); }
+function getChatInput() { return document.getElementById("chatInput"); }
+
+async function loadSessions() {
+    const list = getSessionsList();
+    if (!list) return;
+    list.innerHTML = '<div class="sessions-loading">Loading...</div>';
+    try {
+        const res = await fetch("/api/sessions?limit=50");
+        const data = await res.json();
+        console.log("[Sessions] List response:", data);
+        if (data.ok && Array.isArray(data.sessions)) {
+            sessions = data.sessions;
+            renderSessionsList();
+        } else {
+            console.error("[Sessions] Failed to load:", data.error);
+            list.innerHTML = '<div class="empty-sessions">Failed to load sessions: ' + (data.error || "Unknown error") + '</div>';
+        }
+    } catch (err) {
+        console.error("[Sessions] Network error:", err);
+        list.innerHTML = '<div class="empty-sessions">Network error loading sessions</div>';
+    }
+}
+
+function renderSessionsList() {
+    const list = getSessionsList();
+    if (!list) return;
+    if (sessions.length === 0) {
+        list.innerHTML = '<div class="empty-sessions">No chat history yet.<br>Start a new conversation!</div>';
+        return;
+    }
+    list.innerHTML = sessions.map(s => {
+        const isActive = s.session_id === activeSessionId;
+        const date = formatSessionDate(s.created_at);
+        return `
+        <div class="session-item${isActive ? ' active' : ''}" data-session-id="${s.session_id}" title="${escapeHtml(s.title || 'Untitled')}">
+            <div class="session-item-info">
+                <span class="session-item-title">${escapeHtml(s.title || 'Untitled')}</span>
+                <span class="session-item-date">${date}</span>
+            </div>
+            <div class="session-item-actions">
+                <button class="session-action-btn edit" title="Rename" data-action="rename" data-id="${s.session_id}">✎</button>
+                <button class="session-action-btn delete" title="Delete" data-action="delete" data-id="${s.session_id}">✕</button>
+            </div>
+        </div>
+        `;
+    }).join('');
+
+    list.querySelectorAll(".session-item").forEach(item => {
+        item.addEventListener("click", (e) => {
+            if (e.target.closest(".session-action-btn")) return;
+            const id = item.getAttribute("data-session-id");
+            switchSession(id);
+        });
+    });
+
+    list.querySelectorAll(".session-action-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const action = btn.getAttribute("data-action");
+            const id = btn.getAttribute("data-id");
+            if (action === "delete") {
+                if (confirm("Delete this chat? This cannot be undone.")) {
+                    deleteSession(id);
+                }
+            } else if (action === "rename") {
+                startRenameSession(id);
+            }
+        });
+    });
+}
+
+function formatSessionDate(isoDate) {
+    if (!isoDate) return "";
+    try {
+        const d = new Date(isoDate);
+        const now = new Date();
+        const diffDays = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+        if (diffDays === 0) return "Today";
+        if (diffDays === 1) return "Yesterday";
+        if (diffDays < 7) return `${diffDays} days ago`;
+        return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
+    } catch {
+        return "";
+    }
+}
+
+async function switchSession(sessionId) {
+    activeSessionId = sessionId;
+    localStorage.setItem("rag_session_id", sessionId);
+    const shell = getChatShell();
+    if (shell) shell.classList.remove("with-sidebar");
+
+    const stream = getChatStream();
+    if (stream) stream.innerHTML = '<div class="sessions-loading">Loading conversation...</div>';
+
+    try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+        console.log("[SwitchSession] Response status:", res.status);
+        if (!res.ok) {
+            throw new Error("HTTP " + res.status + ": " + res.statusText);
+        }
+        const data = await res.json();
+        console.log("[SwitchSession] Response data:", data);
+
+        if (!data.ok) {
+            throw new Error(data.error || "Failed to load session");
+        }
+
+        currentMessages = data.messages || [];
+        updateActiveSessionLabel(data.session?.title || "Chat");
+
+        if (stream) {
+            stream.innerHTML = '';
+
+            const intro = document.createElement("div");
+            intro.className = "message system intro-card";
+            intro.innerHTML = `
+                <div class="avatar">AI</div>
+                <div class="bubble">
+                    <p class="tag">System Assistant</p>
+                    <p>Use the settings page to upload and manage documents, then ask questions here.</p>
+                    <p id="chatConfigHint" class="bubble-meta">Current settings: ${runtimeConfig?.default_index || "default-index"} · top ${runtimeConfig?.top_k || 4} · ${runtimeConfig?.use_semantic_ranker ? "semantic ranker on" : "semantic ranker off"}.</p>
+                </div>
+            `;
+            stream.appendChild(intro);
+
+            currentMessages.forEach(msg => {
+                if (msg.role === "user") {
+                    const el = document.createElement("div");
+                    el.className = "message user";
+                    el.innerHTML = `
+                        <div class="bubble user-bubble">
+                            <p class="tag">User</p>
+                            <p>${escapeHtml(msg.content)}</p>
+                        </div>
+                        <div class="avatar user-avatar">U</div>
+                    `;
+                    stream.appendChild(el);
+                } else if (msg.role === "assistant") {
+                    const el = document.createElement("div");
+                    el.className = "message system";
+                    el.innerHTML = `
+                        <div class="avatar">AI</div>
+                        <div class="bubble">
+                            <p class="tag">Assistant</p>
+                            <p>${marked.parse(msg.content)}</p>
+                        </div>
+                    `;
+                    stream.appendChild(el);
+                }
+            });
+
+            const thinking = document.createElement("div");
+            thinking.id = "chatThinking";
+            thinking.className = "message system hidden thinking-row";
+            thinking.innerHTML = `<div class="avatar">AI</div><p class="thinking-text">Thinking ...</p>`;
+            stream.appendChild(thinking);
+
+            const answerCard = document.createElement("div");
+            answerCard.id = "chatAnswerCard";
+            answerCard.className = "message system hidden";
+            answerCard.innerHTML = `
+                <div class="avatar">AI</div>
+                <div class="bubble">
+                    <p class="tag">Assistant</p>
+                    <p id="chatAnswerText"></p>
+                    <p id="chatAnswerMeta" class="bubble-meta"></p>
+                    <div id="chatAnswerAudioContainer" class="tts-audio-container hidden"></div>
+                </div>
+            `;
+            stream.appendChild(answerCard);
+
+            stream.scrollTop = stream.scrollHeight;
+        }
+    } catch (err) {
+        console.error("[SwitchSession] Error:", err);
+        if (stream) stream.innerHTML = '<div class="empty-sessions">Failed to load conversation: ' + escapeHtml(err.message || "Unknown error") + '</div>';
+    }
+
+    renderSessionsList();
+}
+
+function startNewSession() {
+    activeSessionId = null;
+    currentMessages = [];
+    localStorage.removeItem("rag_session_id");
+    const shell = getChatShell();
+    if (shell) shell.classList.remove("with-sidebar");
+    const stream = getChatStream();
+    if (stream) {
+        const semanticLabel = runtimeConfig?.use_semantic_ranker ? "semantic ranker on" : "semantic ranker off";
+        stream.innerHTML = `
+            <div class="message system intro-card">
+                <div class="avatar">AI</div>
+                <div class="bubble">
+                    <p class="tag">System Assistant</p>
+                    <p>Use the settings page to upload and manage documents, then ask questions here.</p>
+                    <p id="chatConfigHint" class="bubble-meta">Current settings: ${runtimeConfig?.default_index || "default-index"} · top ${runtimeConfig?.top_k || 4} · ${semanticLabel}.</p>
+                </div>
+            </div>
+            <div id="chatThinking" class="message system hidden thinking-row">
+                <div class="avatar">AI</div>
+                <p class="thinking-text">Thinking ...</p>
+            </div>
+            <div id="chatAnswerCard" class="message system hidden">
+                <div class="avatar">AI</div>
+                <div class="bubble">
+                    <p class="tag">Assistant</p>
+                    <p id="chatAnswerText"></p>
+                    <p id="chatAnswerMeta" class="bubble-meta"></p>
+                    <div id="chatAnswerAudioContainer" class="tts-audio-container hidden"></div>
+                </div>
+            </div>
+        `;
+    }
+    updateActiveSessionLabel("Active Thread");
+    renderSessionsList();
+    const input = getChatInput();
+    if (input) input.focus();
+}
+
+async function deleteSession(sessionId) {
+    try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+        const data = await res.json();
+        if (data.ok) {
+            if (sessionId === activeSessionId) {
+                startNewSession();
+            } else {
+                await loadSessions();
+            }
+        }
+    } catch (err) {
+        console.error("Failed to delete session:", err);
+    }
+}
+
+function startRenameSession(sessionId) {
+    const session = sessions.find(s => s.session_id === sessionId);
+    if (!session) return;
+    const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
+    if (!item) return;
+    const info = item.querySelector(".session-item-info");
+    const titleSpan = info.querySelector(".session-item-title");
+    const currentTitle = session.title || "";
+    titleSpan.innerHTML = `<input type="text" class="session-edit-input" value="${escapeHtml(currentTitle)}" maxlength="100" />`;
+    const input = info.querySelector(".session-edit-input");
+    input.focus();
+    input.select();
+
+    const finish = async (confirmRename) => {
+        if (confirmRename) {
+            const newTitle = input.value.trim();
+            if (newTitle && newTitle !== currentTitle) {
+                await renameSession(sessionId, newTitle);
+            } else {
+                renderSessionsList();
+            }
+        } else {
+            renderSessionsList();
+        }
+    };
+
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            input.blur();
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            finish(false);
+        }
+    });
+}
+
+async function renameSession(sessionId, title) {
+    try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title })
+        });
+        const data = await res.json();
+        if (data.ok) {
+            await loadSessions();
+            if (sessionId === activeSessionId) {
+                updateActiveSessionLabel(title);
+            }
+        }
+    } catch (err) {
+        console.error("Failed to rename session:", err);
+    }
+}
+
+function updateActiveSessionLabel(title) {
+    const label = getActiveSessionLabel();
+    if (label) label.textContent = title || "Active Thread";
+}
+
+function toggleSidebar() {
+    const sidebar = getSidebar();
+    const shell = getChatShell();
+    if (!sidebar) return;
+    const isHidden = sidebar.classList.contains("hidden");
+    sidebar.classList.toggle("hidden");
+    if (shell) {
+        if (isHidden) {
+            shell.classList.add("with-sidebar");
+        } else {
+            shell.classList.remove("with-sidebar");
+        }
+    }
+}
+
+async function appendMessage(role, content, costSummary) {
+    const stream = getChatStream();
+    if (!stream) return;
+
+    if (role === "assistant") {
+        const el = document.createElement("div");
+        el.className = "message system";
+        
+        let logsHtml = '';
+        if (costSummary) {
+            logsHtml = `
+                <details class="trace">
+                    <summary>View Logs</summary>
+                    <pre>${escapeHtml(JSON.stringify(costSummary, null, 2))}</pre>
+                </details>
+            `;
+        }
+
+        el.innerHTML = `
+            <div class="avatar">AI</div>
+            <div class="bubble">
+                <p class="tag">Assistant</p>
+                <p>${marked.parse(content)}</p>
+                ${logsHtml}
+            </div>
+        `;
+        stream.appendChild(el);
+        stream.scrollTop = stream.scrollHeight;
+    }
+}
+
+const sidebarToggleBtn = document.getElementById("sidebarToggleBtn");
+if (sidebarToggleBtn) {
+    sidebarToggleBtn.addEventListener("click", () => {
+        toggleSidebar();
+        if (!getSidebar()?.classList.contains("hidden")) {
+            loadSessions();
+        }
+    });
+}
+
+const newChatBtn = document.getElementById("newChatBtn");
+if (newChatBtn) {
+    newChatBtn.addEventListener("click", () => {
+        startNewSession();
+    });
+}
 
 if (ttsForm) {
     fetch("/api/tts-config")

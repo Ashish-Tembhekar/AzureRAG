@@ -11,12 +11,15 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="theme-shell">
-  <main class="chat-shell">
+  <main class="chat-shell" id="chatShell">
     <header class="chat-header">
       <div class="header-inner">
-        <div>
-          <p class="overline">Active Thread</p>
-          <h1>Azure RAG</h1>
+        <div class="header-left">
+          <button id="sidebarToggleBtn" class="icon-btn sidebar-toggle-btn" aria-label="Toggle chat history" title="Chat History">☰</button>
+          <div class="header-title-area">
+            <p class="overline" id="activeSessionLabel">Active Thread</p>
+            <h1>Azure RAG</h1>
+          </div>
         </div>
         <div class="header-actions">
           <div class="status-bar">
@@ -27,6 +30,16 @@
         </div>
       </div>
     </header>
+
+    <aside id="sessionsSidebar" class="sessions-sidebar hidden">
+      <div class="sessions-sidebar-header">
+        <h2>Chat History</h2>
+        <button id="newChatBtn" class="btn-primary btn-sm">+ New</button>
+      </div>
+      <div id="sessionsList" class="sessions-list">
+        <div class="sessions-loading">Loading...</div>
+      </div>
+    </aside>
 
     <section class="chat-stage">
       <div class="chat-stream">

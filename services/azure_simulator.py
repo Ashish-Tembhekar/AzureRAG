@@ -54,6 +54,8 @@ class UsageTracker:
     stt_seconds_used: float = 0.0
     tts_chars_used: int = 0
     speech_cost_usd: float = 0.0
+    cosmos_rus_consumed: float = 0.0
+    cosmos_storage_mb: float = 0.0
 
     def as_json_summary(
         self, query_cost_usd: float, limit_status: str
@@ -69,6 +71,8 @@ class UsageTracker:
             "stt_seconds_used": round(self.stt_seconds_used, 2),
             "tts_chars_used": int(self.tts_chars_used),
             "speech_cost_usd": round(self.speech_cost_usd, 6),
+            "cosmos_rus_consumed": round(self.cosmos_rus_consumed, 4),
+            "cosmos_storage_mb": round(self.cosmos_storage_mb, 6),
             "limit_status": limit_status,
         }
 
@@ -80,6 +84,8 @@ class AzureCapacityMonitor:
     MAX_ADI_PAGES_PER_MONTH = 500
     MAX_STT_SECONDS_MONTH = 18000
     MAX_TTS_CHARS_MONTH = 500000
+    MAX_COSMOS_STORAGE_MB = 25000
+    MAX_SESSION_COUNT = 10000
     FREE_LIMITS = TierLimits(
         max_indexes=3,
         max_documents_per_index=1000,
@@ -115,6 +121,9 @@ class AzureCapacityMonitor:
         self._speech_counter_path = Path(".speech_usage.json")
         self._speech_counter = self._load_speech_counter()
         self._sync_speech_usage()
+        self._cosmos_counter_path = Path(".cosmos_usage.json")
+        self._cosmos_counter = self._load_cosmos_counter()
+        self._sync_cosmos_usage()
         self._initialized = True
 
     @staticmethod
@@ -217,6 +226,35 @@ class AzureCapacityMonitor:
         )
         self.usage.tts_chars_used = int(self._speech_counter.get("tts_chars", 0))
 
+    def _load_cosmos_counter(self) -> Dict[str, Any]:
+        if not self._cosmos_counter_path.exists():
+            return {"cosmos_rus": 0.0, "storage_mb": 0.0, "session_count": 0}
+        try:
+            payload = json.loads(self._cosmos_counter_path.read_text(encoding="utf-8"))
+            if (
+                "cosmos_rus" not in payload
+                or "storage_mb" not in payload
+                or "session_count" not in payload
+            ):
+                return {"cosmos_rus": 0.0, "storage_mb": 0.0, "session_count": 0}
+            return payload
+        except Exception:
+            return {"cosmos_rus": 0.0, "storage_mb": 0.0, "session_count": 0}
+
+    def _save_cosmos_counter(self) -> None:
+        self._cosmos_counter_path.write_text(
+            json.dumps(self._cosmos_counter), encoding="utf-8"
+        )
+
+    def _sync_cosmos_usage(self) -> None:
+        self._cosmos_counter = self._load_cosmos_counter()
+        self.usage.cosmos_rus_consumed = float(
+            self._cosmos_counter.get("cosmos_rus", 0.0)
+        )
+        self.usage.cosmos_storage_mb = float(
+            self._cosmos_counter.get("storage_mb", 0.0)
+        )
+
     def refresh_tier(self) -> None:
         with self._lock:
             self._refresh_tier_locked()
@@ -234,6 +272,12 @@ class AzureCapacityMonitor:
                 "tts_chars": 0,
             }
             self._save_speech_counter()
+            self._cosmos_counter = {
+                "cosmos_rus": 0.0,
+                "storage_mb": 0.0,
+                "session_count": 0,
+            }
+            self._save_cosmos_counter()
 
     def _raise_quota(self, message: str) -> None:
         raise AzureQuotaExceededError(f"[{self.tier}] {message}")
@@ -254,6 +298,8 @@ class AzureCapacityMonitor:
                 self.usage.total_adi_pages_month / self.MAX_ADI_PAGES_PER_MONTH
             )
         if ratios and max(ratios) >= 0.9:
+            return "FREE_NEAR_LIMIT"
+        if self.usage.cosmos_storage_mb >= self.MAX_COSMOS_STORAGE_MB * 0.9:
             return "FREE_NEAR_LIMIT"
         return "FREE_OK"
 
@@ -502,6 +548,53 @@ class AzureCapacityMonitor:
                 self.usage.tts_chars_used = projected_tts
             self._calculate_speech_cost()
             return self._limit_status()
+
+    def verify_cosmos_quota(self, message_payload: Dict[str, Any]) -> int:
+        import sys
+
+        payload_bytes = sys.getsizeof(str(message_payload))
+        with self._lock:
+            self._sync_cosmos_usage()
+            projected_storage = self.usage.cosmos_storage_mb + (
+                payload_bytes / (1024.0 * 1024.0)
+            )
+            if projected_storage > self.MAX_COSMOS_STORAGE_MB:
+                self._raise_quota(
+                    f"Cosmos DB storage limit exceeded: {projected_storage:.2f}MB > {self.MAX_COSMOS_STORAGE_MB}MB"
+                )
+            session_count = int(self._cosmos_counter.get("session_count", 0))
+            if session_count >= self.MAX_SESSION_COUNT:
+                self._raise_quota(
+                    f"Session count limit exceeded: {session_count} >= {self.MAX_SESSION_COUNT}"
+                )
+            return payload_bytes
+
+    def register_cosmos_usage(self, request_charge: float, storage_bytes: int) -> str:
+        with self._lock:
+            self._sync_cosmos_usage()
+            projected_rus = self.usage.cosmos_rus_consumed + request_charge
+            projected_storage = self.usage.cosmos_storage_mb + (
+                storage_bytes / (1024.0 * 1024.0)
+            )
+            self._cosmos_counter["cosmos_rus"] = projected_rus
+            self._cosmos_counter["storage_mb"] = projected_storage
+            self._save_cosmos_counter()
+            self.usage.cosmos_rus_consumed = projected_rus
+            self.usage.cosmos_storage_mb = projected_storage
+            return self._limit_status()
+
+    def increment_session_count(self) -> int:
+        with self._lock:
+            self._sync_cosmos_usage()
+            count = int(self._cosmos_counter.get("session_count", 0)) + 1
+            self._cosmos_counter["session_count"] = count
+            self._save_cosmos_counter()
+            return count
+
+    def get_cosmos_session_count(self) -> int:
+        with self._lock:
+            self._sync_cosmos_usage()
+            return int(self._cosmos_counter.get("session_count", 0))
 
 
 class RAGCostEvaluator:

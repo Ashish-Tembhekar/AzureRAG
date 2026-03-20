@@ -19,6 +19,7 @@ from flask import Flask, jsonify, render_template, request
 
 from services import (
     AzureQuotaExceededError,
+    get_chat_history_service,
     get_document_store,
     get_llm_service,
     get_rag_cost_evaluator,
@@ -307,6 +308,9 @@ def delete_documents() -> Any:
 
 @app.post("/api/chat")
 def chat() -> Any:
+    import logging
+
+    logger = logging.getLogger(__name__)
     payload = request.get_json(silent=True) or {}
     query = str(payload.get("query", "")).strip()
     if not query:
@@ -326,6 +330,14 @@ def chat() -> Any:
     temperature = float(payload.get("temperature", runtime_config.chat_temperature))
     max_tokens = int(payload.get("max_tokens", runtime_config.chat_max_tokens))
     model = str(payload.get("model", runtime_config.model))
+    session_id = payload.get("session_id")
+
+    cosmos_service = get_chat_history_service()
+    if not session_id:
+        session_id = cosmos_service.create_session(user_id="anonymous")
+        logger.info(f"Created new session: {session_id}")
+
+    cosmos_history = cosmos_service.get_session_history(session_id)
 
     contexts = document_store.search(
         query=query,
@@ -348,21 +360,30 @@ def chat() -> Any:
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            chat_history=chat_history,
+            chat_history=cosmos_history,
         )
         cost_summary = evaluator.evaluate_query(
             input_tokens=int(llm_result["input_tokens"]),
             output_tokens=int(llm_result["output_tokens"]),
             use_semantic_ranker=use_semantic_ranker,
         )
-        chat_history.append({"role": "user", "content": query})
-        chat_history.append({"role": "assistant", "content": str(llm_result["answer"])})
-        if len(chat_history) > 20:
-            del chat_history[:-20]
+
+        cosmos_service.save_message(session_id, "user", query)
+        cosmos_service.save_message(session_id, "assistant", str(llm_result["answer"]))
+
+        chat_history.clear()
+        chat_history.extend(cosmos_history[-20:])
+
+        logger.info(
+            f"Chat response: session={session_id}, tokens={llm_result['input_tokens']}+{llm_result['output_tokens']}, "
+            f"contexts={len(contexts)}, cosmos_rus={cost_summary.get('cosmos_rus_consumed', 0)}, "
+            f"total_cost=${cost_summary.get('total_session_cost_usd', 0):.6f}"
+        )
 
         return jsonify(
             {
                 "ok": True,
+                "session_id": session_id,
                 "answer": llm_result["answer"],
                 "model": llm_result["model"],
                 "contexts": context_payload,
@@ -374,8 +395,10 @@ def chat() -> Any:
             }
         )
     except AzureQuotaExceededError as exc:
+        logger.error(f"Quota exceeded: {exc}")
         return jsonify({"ok": False, "error": str(exc)}), 429
     except Exception as exc:
+        logger.error(f"Chat error: {exc}", exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
@@ -417,6 +440,13 @@ def voice_chat() -> Any:
         )
         max_tokens = int(request.form.get("max_tokens", runtime_config.chat_max_tokens))
         model = str(request.form.get("model", runtime_config.model))
+        session_id = request.form.get("session_id")
+
+        cosmos_service = get_chat_history_service()
+        if not session_id:
+            session_id = cosmos_service.create_session(user_id="anonymous")
+
+        cosmos_history = cosmos_service.get_session_history(session_id)
 
         contexts = document_store.search(
             query=query,
@@ -438,17 +468,19 @@ def voice_chat() -> Any:
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            chat_history=chat_history,
+            chat_history=cosmos_history,
         )
         cost_summary = evaluator.evaluate_query(
             input_tokens=int(llm_result["input_tokens"]),
             output_tokens=int(llm_result["output_tokens"]),
             use_semantic_ranker=use_semantic_ranker,
         )
-        chat_history.append({"role": "user", "content": query})
-        chat_history.append({"role": "assistant", "content": str(llm_result["answer"])})
-        if len(chat_history) > 20:
-            del chat_history[:-20]
+
+        cosmos_service.save_message(session_id, "user", query)
+        cosmos_service.save_message(session_id, "assistant", str(llm_result["answer"]))
+
+        chat_history.clear()
+        chat_history.extend(cosmos_history[-20:])
 
         answer_text = str(llm_result["answer"])
         tts_audio_data = speech_service.synthesize_speech(answer_text)
@@ -457,6 +489,7 @@ def voice_chat() -> Any:
         return jsonify(
             {
                 "ok": True,
+                "session_id": session_id,
                 "answer": answer_text,
                 "model": llm_result["model"],
                 "contexts": context_payload,
@@ -501,6 +534,13 @@ def chat_with_tts() -> Any:
     temperature = float(payload.get("temperature", runtime_config.chat_temperature))
     max_tokens = int(payload.get("max_tokens", runtime_config.chat_max_tokens))
     model = str(payload.get("model", runtime_config.model))
+    session_id = payload.get("session_id")
+
+    cosmos_service = get_chat_history_service()
+    if not session_id:
+        session_id = cosmos_service.create_session(user_id="anonymous")
+
+    cosmos_history = cosmos_service.get_session_history(session_id)
 
     contexts = document_store.search(
         query=query,
@@ -523,17 +563,19 @@ def chat_with_tts() -> Any:
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            chat_history=chat_history,
+            chat_history=cosmos_history,
         )
         cost_summary = evaluator.evaluate_query(
             input_tokens=int(llm_result["input_tokens"]),
             output_tokens=int(llm_result["output_tokens"]),
             use_semantic_ranker=use_semantic_ranker,
         )
-        chat_history.append({"role": "user", "content": query})
-        chat_history.append({"role": "assistant", "content": str(llm_result["answer"])})
-        if len(chat_history) > 20:
-            del chat_history[:-20]
+
+        cosmos_service.save_message(session_id, "user", query)
+        cosmos_service.save_message(session_id, "assistant", str(llm_result["answer"]))
+
+        chat_history.clear()
+        chat_history.extend(cosmos_history[-20:])
 
         answer_text = str(llm_result["answer"])
 
@@ -544,6 +586,7 @@ def chat_with_tts() -> Any:
         return jsonify(
             {
                 "ok": True,
+                "session_id": session_id,
                 "answer": answer_text,
                 "model": llm_result["model"],
                 "contexts": context_payload,
@@ -563,6 +606,14 @@ def chat_with_tts() -> Any:
 
 @app.post("/api/reset")
 def reset_session() -> Any:
+    payload = request.get_json(silent=True) or {}
+    session_id = payload.get("session_id")
+    if session_id:
+        try:
+            cosmos_service = get_chat_history_service()
+            cosmos_service.delete_session(session_id)
+        except Exception:
+            pass
     chat_history.clear()
     evaluator.capacity_monitor.reset_usage()
     return jsonify({"ok": True, "message": "Session usage and chat history reset"})
@@ -630,6 +681,78 @@ def generate_tts() -> Any:
     except AzureQuotaExceededError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 429
     except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/sessions")
+def list_sessions() -> Any:
+    import logging
+
+    logger = logging.getLogger(__name__)
+    limit = int(request.args.get("limit", 50))
+    offset = int(request.args.get("offset", 0))
+    try:
+        cosmos_service = get_chat_history_service()
+        sessions = cosmos_service.list_sessions(limit=limit, offset=offset)
+        logger.info(f"List sessions: found {len(sessions)} sessions")
+        return jsonify({"ok": True, "sessions": sessions})
+    except Exception as exc:
+        logger.error(f"List sessions error: {exc}", exc_info=True)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/sessions/<session_id>")
+def get_session(session_id: str) -> Any:
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        cosmos_service = get_chat_history_service()
+        info = cosmos_service.get_session_info(session_id)
+        if not info:
+            logger.warning(f"Session not found: {session_id}")
+            return jsonify({"ok": False, "error": "Session not found"}), 404
+        messages = cosmos_service.get_session_history(session_id, limit=100)
+        logger.info(f"Get session {session_id}: {len(messages)} messages")
+        return jsonify({"ok": True, "session": info, "messages": messages})
+    except Exception as exc:
+        logger.error(f"Get session error: {exc}", exc_info=True)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.put("/api/sessions/<session_id>")
+def update_session(session_id: str) -> Any:
+    import logging
+
+    logger = logging.getLogger(__name__)
+    payload = request.get_json(silent=True) or {}
+    title = payload.get("title", "")
+    if not title:
+        return jsonify({"ok": False, "error": "title is required"}), 400
+    try:
+        cosmos_service = get_chat_history_service()
+        success = cosmos_service.update_session_title(session_id, title)
+        if not success:
+            return jsonify({"ok": False, "error": "Session not found"}), 404
+        logger.info(f"Renamed session {session_id} to: {title}")
+        return jsonify({"ok": True})
+    except Exception as exc:
+        logger.error(f"Update session error: {exc}", exc_info=True)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.delete("/api/sessions/<session_id>")
+def delete_session_endpoint(session_id: str) -> Any:
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        cosmos_service = get_chat_history_service()
+        cosmos_service.delete_session(session_id)
+        logger.info(f"Deleted session: {session_id}")
+        return jsonify({"ok": True})
+    except Exception as exc:
+        logger.error(f"Delete session error: {exc}", exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
