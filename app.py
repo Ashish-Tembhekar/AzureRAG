@@ -41,6 +41,7 @@ class RuntimeConfig:
     chat_max_tokens: int = 1536
     use_vector_search: bool = True
     model: str = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct")
+    stream_responses: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,17 +56,7 @@ class RuntimeConfig:
             "chat_max_tokens": self.chat_max_tokens,
             "use_vector_search": self.use_vector_search,
             "model": self.model,
-            "pricing": {
-                "input_per_1k_tokens_usd": float(
-                    os.getenv("AZURE_LLM_INPUT_COST_PER_1K", "0.00015")
-                ),
-                "output_per_1k_tokens_usd": float(
-                    os.getenv("AZURE_LLM_OUTPUT_COST_PER_1K", "0.00060")
-                ),
-                "semantic_query_cost_usd": float(
-                    os.getenv("AZURE_SEMANTIC_QUERY_COST", "0.001")
-                ),
-            },
+            "stream_responses": self.stream_responses,
         }
 
 
@@ -136,6 +127,10 @@ def _update_config(payload: Dict[str, Any]) -> None:
     if "use_vector_search" in payload:
         runtime_config.use_vector_search = _coerce_bool(
             payload["use_vector_search"], runtime_config.use_vector_search
+        )
+    if "stream_responses" in payload:
+        runtime_config.stream_responses = _coerce_bool(
+            payload["stream_responses"], runtime_config.stream_responses
         )
 
     pricing = payload.get("pricing", {})
@@ -400,6 +395,121 @@ def chat() -> Any:
     except Exception as exc:
         logger.error(f"Chat error: {exc}", exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.post("/api/chat/stream")
+def chat_stream() -> Any:
+    from flask import Response, stream_with_context
+    import json
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    payload = request.get_json(silent=True) or {}
+    query = str(payload.get("query", "")).strip()
+    if not query:
+        return jsonify({"ok": False, "error": "query is required"}), 400
+
+    index_name = (
+        str(payload.get("index_name", runtime_config.default_index)).strip()
+        or runtime_config.default_index
+    )
+    top_k = int(payload.get("top_k", runtime_config.top_k))
+    use_semantic_ranker = _coerce_bool(
+        payload.get("use_semantic_ranker"), runtime_config.use_semantic_ranker
+    )
+    use_vector_search = _coerce_bool(
+        payload.get("use_vector_search"), runtime_config.use_vector_search
+    )
+    temperature = float(payload.get("temperature", runtime_config.chat_temperature))
+    max_tokens = int(payload.get("max_tokens", runtime_config.chat_max_tokens))
+    model = str(payload.get("model", runtime_config.model))
+    session_id = payload.get("session_id")
+
+    cosmos_service = get_chat_history_service()
+    if not session_id:
+        session_id = cosmos_service.create_session(user_id="anonymous")
+
+    cosmos_history = cosmos_service.get_session_history(session_id)
+
+    contexts = document_store.search(
+        query=query,
+        index_name=index_name,
+        top_k=top_k,
+        use_semantic_ranker=use_semantic_ranker,
+        use_vector_search=use_vector_search,
+        vector_dimensions=runtime_config.embedding_dimensions,
+    )
+    context_texts = [c.text for c in contexts]
+    context_payload = [
+        {"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text}
+        for c in contexts
+    ]
+
+    def generate():
+        try:
+            stream_gen = llm_service.stream_rag_answer(
+                query=query,
+                contexts=context_texts,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                chat_history=cosmos_history,
+            )
+
+            full_answer = ""
+            token_count = 0
+            for chunk in stream_gen:
+                full_answer += chunk
+                token_count += 1
+                yield f"data: {json.dumps({'type': 'token', 'token': chunk})}\n\n"
+
+            meta = stream_gen.send(None) if hasattr(stream_gen, "send") else {}
+            if not isinstance(meta, dict):
+                meta = {}
+
+            cost_summary = evaluator.evaluate_query(
+                input_tokens=meta.get(
+                    "input_tokens",
+                    max(int(len(" ".join(context_texts).split()) * 1.3), 1),
+                ),
+                output_tokens=meta.get("output_tokens", token_count),
+                use_semantic_ranker=use_semantic_ranker,
+            )
+
+            cosmos_service.save_message(session_id, "user", query)
+            cosmos_service.save_message(session_id, "assistant", full_answer)
+
+            chat_history.clear()
+            chat_history.extend(cosmos_history[-20:])
+
+            final_data = {
+                "type": "done",
+                "session_id": session_id,
+                "answer": full_answer,
+                "model": meta.get("model", model),
+                "contexts": context_payload,
+                "usage": {
+                    "input_tokens": meta.get("input_tokens", 0),
+                    "output_tokens": meta.get("output_tokens", 0),
+                },
+                "cost_summary": cost_summary,
+            }
+            yield f"data: {json.dumps(final_data)}\n\n"
+            logger.info(f"Stream chat: session={session_id}, tokens={token_count}")
+        except Exception as exc:
+            logger.error(f"Stream chat error: {exc}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.post("/api/voice-chat")

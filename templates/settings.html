@@ -76,6 +76,14 @@
           <label>Model</label>
           <input type="text" id="model" readonly>
 
+          <label class="check card-check" for="streamResponses">
+            <input type="checkbox" id="streamResponses" checked>
+            <span>
+              <strong>Response Streaming</strong>
+              <small>Stream LLM responses word-by-word for faster perceived output.</small>
+            </span>
+          </label>
+
           <div class="row actions-row">
             <button type="submit" class="btn-primary">Save Settings</button>
             <button id="resetBtn" type="button" class="btn-ghost">Reset Session</button>

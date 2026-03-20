@@ -152,6 +152,10 @@ function applyConfig(config) {
   if (defaultSemanticRankerInput) {
     defaultSemanticRankerInput.checked = Boolean(config.use_semantic_ranker);
   }
+  const streamToggle = document.getElementById("streamResponses");
+  if (streamToggle) {
+    streamToggle.checked = Boolean(config.stream_responses !== false);
+  }
   setValue(document.getElementById("chunkSize"), config.chunk_size || 1000);
   setValue(document.getElementById("chunkOverlap"), config.chunk_overlap || 200);
   setValue(document.getElementById("embeddingDimensions"), config.embedding_dimensions || 1536);
@@ -346,96 +350,233 @@ if (chatBtn) {
             setStatus(chatStatusDot, chatStatus, "error", "Enter a question");
             return;
         }
-        renderPendingChat(query);
-        setStatus(chatStatusDot, chatStatus, "working", "Retrieving context and generating answer...");
+        document.getElementById("chatInput").value = "";
         setBusy([chatBtn], true);
-        const payload = {
-            query,
-            index_name: runtimeConfig?.default_index || "default-index",
-            top_k: Number(runtimeConfig?.top_k ?? 4),
-            use_semantic_ranker: Boolean(runtimeConfig?.use_semantic_ranker),
-            session_id: activeSessionId || undefined,
-        };
-        console.log("[Chat] Sending:", payload);
-        try {
-            const res = await fetch("/api/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            });
-            console.log("[Chat] Response status:", res.status);
-            if (!res.ok) {
-                throw new Error("HTTP " + res.status + ": " + res.statusText);
-            }
-            const data = await res.json();
-            console.log("[Chat] Response data:", data);
-            showJson(chatResult, data);
-            if (data.ok) {
-                const contexts = Array.isArray(data.contexts) ? data.contexts.length : 0;
-                const modelName = data.model ? " · " + data.model : "";
+        const useStreaming = runtimeConfig?.stream_responses !== false;
+        if (useStreaming) {
+            await sendStreamingChat(query);
+        } else {
+            await sendNonStreamingChat(query);
+        }
+        setBusy([chatBtn], false);
+    });
+}
 
-                if (data.session_id && data.session_id !== activeSessionId) {
-                    activeSessionId = data.session_id;
-                    localStorage.setItem("rag_session_id", data.session_id);
-                    loadSessions();
-                }
+async function sendStreamingChat(query) {
+    renderPendingChat(query);
+    setStatus(chatStatusDot, chatStatus, "working", "Retrieving context...");
+    const payload = {
+        query,
+        index_name: runtimeConfig?.default_index || "default-index",
+        top_k: Number(runtimeConfig?.top_k ?? 4),
+        use_semantic_ranker: Boolean(runtimeConfig?.use_semantic_ranker),
+        session_id: activeSessionId || undefined,
+    };
+    console.log("[Stream] Sending:", payload);
+    try {
+        const res = await fetch("/api/chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            throw new Error("HTTP " + res.status + ": " + res.statusText);
+        }
 
-                currentMessages.push({ role: "user", content: query });
-                currentMessages.push({ role: "assistant", content: data.answer || "" });
+        const stream = getChatStream();
+        const thinking = document.getElementById("chatThinking");
+        if (thinking) thinking.classList.add("hidden");
 
-                const stream = getChatStream();
-                if (stream) {
-                    const thinking = document.getElementById("chatThinking");
-                    if (thinking) thinking.classList.add("hidden");
+        const userEl = document.createElement("div");
+        userEl.className = "message user";
+        userEl.innerHTML = '<div class="bubble user-bubble"><p class="tag">User</p><p>' + escapeHtml(query) + '</p></div><div class="avatar user-avatar">U</div>';
+        if (stream) stream.appendChild(userEl);
 
-                    const userEl = document.createElement("div");
-                    userEl.className = "message user";
-                    userEl.innerHTML = '<div class="bubble user-bubble"><p class="tag">User</p><p>' + escapeHtml(query) + '</p></div><div class="avatar user-avatar">U</div>';
-                    stream.appendChild(userEl);
-                }
+        const assistantEl = document.createElement("div");
+        assistantEl.className = "message system";
+        assistantEl.innerHTML = '<div class="avatar">AI</div><div class="bubble"><p class="tag">Assistant</p><p id="streamingText" class="streaming-text"></p></div>';
+        if (stream) stream.appendChild(assistantEl);
 
-                appendMessage("assistant", data.answer || "", data.cost_summary);
+        const streamingText = document.getElementById("streamingText");
 
-                const meta = document.getElementById("chatAnswerMeta");
-                if (meta) meta.textContent = contexts + " contexts" + modelName;
+        let fullAnswer = "";
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalData = null;
 
-                setStatus(chatStatusDot, chatStatus, "success", "Answer ready (" + contexts + " contexts)");
-
-                if (isSpeakerEnabled && data.answer) {
-                    setStatus(chatStatusDot, chatStatus, "working", "Generating audio...");
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                    const jsonStr = line.slice(6);
                     try {
-                        const ttsRes = await fetch("/api/tts-generate", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ text: data.answer })
-                        });
-                        const ttsData = await ttsRes.json();
-                        if (ttsData.ok && ttsData.audio) {
-                            updateChatAudio(ttsData.audio);
-                            setStatus(chatStatusDot, chatStatus, "success", "Answer ready with audio (" + contexts + " contexts)");
-                        } else {
-                            console.error("[Chat] TTS generation failed:", ttsData.error);
-                            setStatus(chatStatusDot, chatStatus, "success", "Answer ready (" + contexts + " contexts) - audio failed");
+                        const data = JSON.parse(jsonStr);
+                        if (data.type === "token") {
+                            fullAnswer += data.token;
+                            if (streamingText) {
+                                streamingText.innerHTML = marked.parse(fullAnswer) + '<span class="cursor">▋</span>';
+                            }
+                            if (stream) stream.scrollTop = stream.scrollHeight;
+                        } else if (data.type === "done") {
+                            finalData = data;
+                        } else if (data.type === "error") {
+                            throw new Error(data.error);
                         }
-                    } catch (ttsErr) {
-                        console.error("[Chat] TTS error:", ttsErr);
-                        setStatus(chatStatusDot, chatStatus, "success", "Answer ready (" + contexts + " contexts)");
+                    } catch (e) {
+                        if (e.message && e.message.includes("HTTP")) throw e;
+                        console.error("[Stream] Parse error:", e, jsonStr);
                     }
                 }
-            } else {
-                console.error("[Chat] API error:", data.error);
-                renderChatResponse(data.error || "Chat failed", "Request failed", null, true);
-                setStatus(chatStatusDot, chatStatus, "error", data.error ? "Chat failed: " + data.error : "Chat failed");
             }
-        } catch (err) {
-            console.error("[Chat] Request error:", err);
-            showJson(chatResult, { ok: false, error: err.message || "Chat failed" });
-            renderChatResponse(err.message || "Chat failed", "Request failed", null, true);
-            setStatus(chatStatusDot, chatStatus, "error", "Chat failed: " + (err.message || "Unknown error"));
-        } finally {
-            setBusy([chatBtn], false);
         }
-    });
+
+        if (streamingText) {
+            streamingText.innerHTML = marked.parse(fullAnswer);
+        }
+
+        if (finalData) {
+            const session_id = finalData.session_id;
+            if (session_id && session_id !== activeSessionId) {
+                activeSessionId = session_id;
+                localStorage.setItem("rag_session_id", session_id);
+                loadSessions();
+            }
+            currentMessages.push({ role: "user", content: query });
+            currentMessages.push({ role: "assistant", content: fullAnswer });
+
+            if (finalData.cost_summary) {
+                saveSessionLogs(session_id, finalData.cost_summary);
+                const logsHtml = '<details class="trace"><summary>View Logs</summary><pre>' + escapeHtml(JSON.stringify(finalData.cost_summary, null, 2)) + '</pre></details>';
+                const bubble = assistantEl.querySelector(".bubble");
+                if (bubble) bubble.insertAdjacentHTML("beforeend", logsHtml);
+            }
+        }
+
+        if (stream) stream.scrollTop = stream.scrollHeight;
+        setStatus(chatStatusDot, chatStatus, "success", "Answer ready");
+        console.log("[Stream] Complete:", finalData);
+
+        if (isSpeakerEnabled && fullAnswer) {
+            generateAndPlayAudio(fullAnswer, stream);
+        }
+    } catch (err) {
+        console.error("[Stream] Error:", err);
+        renderChatResponse(err.message || "Chat failed", "Request failed", null, true);
+        setStatus(chatStatusDot, chatStatus, "error", "Chat failed: " + (err.message || "Unknown error"));
+    }
+}
+
+async function sendNonStreamingChat(query) {
+    renderPendingChat(query);
+    setStatus(chatStatusDot, chatStatus, "working", "Retrieving context and generating answer...");
+    const payload = {
+        query,
+        index_name: runtimeConfig?.default_index || "default-index",
+        top_k: Number(runtimeConfig?.top_k ?? 4),
+        use_semantic_ranker: Boolean(runtimeConfig?.use_semantic_ranker),
+        session_id: activeSessionId || undefined,
+    };
+    console.log("[Chat] Sending:", payload);
+    try {
+        const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        console.log("[Chat] Response status:", res.status);
+        if (!res.ok) {
+            throw new Error("HTTP " + res.status + ": " + res.statusText);
+        }
+        const data = await res.json();
+        console.log("[Chat] Response data:", data);
+        if (data.ok) {
+            const contexts = Array.isArray(data.contexts) ? data.contexts.length : 0;
+            const modelName = data.model ? " · " + data.model : "";
+
+            if (data.session_id && data.session_id !== activeSessionId) {
+                activeSessionId = data.session_id;
+                localStorage.setItem("rag_session_id", data.session_id);
+                loadSessions();
+            }
+
+            currentMessages.push({ role: "user", content: query });
+            currentMessages.push({ role: "assistant", content: data.answer || "" });
+
+            if (data.cost_summary) {
+                saveSessionLogs(data.session_id, data.cost_summary);
+            }
+
+            const stream = getChatStream();
+            if (stream) {
+                const thinking = document.getElementById("chatThinking");
+                if (thinking) thinking.classList.add("hidden");
+                const userEl = document.createElement("div");
+                userEl.className = "message user";
+                userEl.innerHTML = '<div class="bubble user-bubble"><p class="tag">User</p><p>' + escapeHtml(query) + '</p></div><div class="avatar user-avatar">U</div>';
+                stream.appendChild(userEl);
+            }
+
+            appendMessage("assistant", data.answer || "", data.cost_summary);
+
+            const meta = document.getElementById("chatAnswerMeta");
+            if (meta) meta.textContent = contexts + " contexts" + modelName;
+            setStatus(chatStatusDot, chatStatus, "success", "Answer ready (" + contexts + " contexts)");
+
+            if (isSpeakerEnabled && data.answer) {
+                const stream = getChatStream();
+                generateAndPlayAudio(data.answer, stream);
+            }
+        } else {
+            console.error("[Chat] API error:", data.error);
+            renderChatResponse(data.error || "Chat failed", "Request failed", null, true);
+            setStatus(chatStatusDot, chatStatus, "error", data.error ? "Chat failed: " + data.error : "Chat failed");
+        }
+    } catch (err) {
+        console.error("[Chat] Request error:", err);
+        showJson(chatResult, { ok: false, error: err.message || "Chat failed" });
+        renderChatResponse(err.message || "Chat failed", "Request failed", null, true);
+        setStatus(chatStatusDot, chatStatus, "error", "Chat failed: " + (err.message || "Unknown error"));
+    }
+}
+
+async function generateAndPlayAudio(answerText, streamEl) {
+    try {
+        setStatus(chatStatusDot, chatStatus, "working", "Generating audio...");
+        console.log("[TTS] Requesting audio for answer");
+        const ttsRes = await fetch("/api/tts-generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: answerText })
+        });
+        const ttsData = await ttsRes.json();
+        console.log("[TTS] Response:", ttsData);
+        if (ttsData.ok && ttsData.audio) {
+            const audioSrc = "data:audio/wav;base64," + ttsData.audio;
+            const audio = new Audio(audioSrc);
+            audio.play().catch(e => console.error("[TTS] Play error:", e));
+
+            if (streamEl) {
+                const audioEl = document.createElement("div");
+                audioEl.className = "message system";
+                audioEl.innerHTML = '<div class="avatar">🔊</div><div class="bubble tts-bubble"><p class="tag">Audio Response</p><audio src="' + audioSrc + '" controls></audio></div>';
+                streamEl.appendChild(audioEl);
+                streamEl.scrollTop = streamEl.scrollHeight;
+            }
+
+            setStatus(chatStatusDot, chatStatus, "success", "Audio playing");
+        } else {
+            console.error("[TTS] Generation failed:", ttsData.error);
+            setStatus(chatStatusDot, chatStatus, "error", "TTS failed: " + (ttsData.error || "Unknown error"));
+        }
+    } catch (ttsErr) {
+        console.error("[TTS] Error:", ttsErr);
+        setStatus(chatStatusDot, chatStatus, "error", "TTS error");
+    }
 }
 
 function updateChatAudio(audioBase64) {
@@ -457,6 +598,7 @@ if (configForm) {
       use_semantic_ranker: Boolean(defaultSemanticRankerInput?.checked),
       azure_tier: document.getElementById("azureTier")?.value,
       model: document.getElementById("model")?.value,
+      stream_responses: Boolean(document.getElementById("streamResponses")?.checked),
       pricing: {
         input_per_1k_tokens_usd: Number(document.getElementById("inputCost")?.value || 0),
         output_per_1k_tokens_usd: Number(document.getElementById("outputCost")?.value || 0),
@@ -501,6 +643,9 @@ if (resetBtn) {
       const data = await res.json();
       showJson(configResult, data);
       if (data.ok) {
+        if (activeSessionId) {
+            clearSessionLogs(activeSessionId);
+        }
         setStatus(configStatusDot, configStatus, "success", "Session reset");
       } else {
         setStatus(
@@ -668,6 +813,10 @@ async function sendVoiceMessage(audioBlob) {
                 if (thinking) thinking.classList.add("hidden");
             }
 
+            if (data.cost_summary) {
+                saveSessionLogs(data.session_id, data.cost_summary);
+            }
+
             appendMessage("assistant", data.answer || "", data.cost_summary);
 
             const meta = document.getElementById("chatAnswerMeta");
@@ -675,6 +824,7 @@ async function sendVoiceMessage(audioBlob) {
 
             setStatus(chatStatusDot, chatStatus, "success", "Voice response ready (" + contexts + " contexts)");
         } else {
+            console.error("[Voice] API error:", data.error);
             console.error("[Voice] API error:", data.error);
             renderChatResponse(data.error || "Voice chat failed", "Request failed", null, true);
             setStatus(chatStatusDot, chatStatus, "error", data.error ? "Voice failed: " + data.error : "Voice failed");
@@ -769,6 +919,35 @@ function getChatShell() { return document.getElementById("chatShell"); }
 function getChatStream() { return document.querySelector(".chat-stream"); }
 function getActiveSessionLabel() { return document.getElementById("activeSessionLabel"); }
 function getChatInput() { return document.getElementById("chatInput"); }
+
+function saveSessionLogs(sessionId, costSummary) {
+    if (!sessionId || !costSummary) return;
+    const key = "rag_logs_" + sessionId;
+    let logs = [];
+    try {
+        logs = JSON.parse(localStorage.getItem(key) || "[]");
+    } catch { logs = []; }
+    logs.push(costSummary);
+    try {
+        localStorage.setItem(key, JSON.stringify(logs));
+    } catch (e) {
+        console.warn("[Logs] localStorage full, clearing old sessions");
+        try { localStorage.removeItem(key); localStorage.setItem(key, JSON.stringify(logs)); } catch {}
+    }
+}
+
+function getSessionLogs(sessionId) {
+    if (!sessionId) return [];
+    const key = "rag_logs_" + sessionId;
+    try {
+        return JSON.parse(localStorage.getItem(key) || "[]");
+    } catch { return []; }
+}
+
+function clearSessionLogs(sessionId) {
+    if (!sessionId) return;
+    localStorage.removeItem("rag_logs_" + sessionId);
+}
 
 async function loadSessions() {
     const list = getSessionsList();
@@ -894,6 +1073,8 @@ async function switchSession(sessionId) {
             `;
             stream.appendChild(intro);
 
+            const sessionLogs = getSessionLogs(sessionId);
+            let assistantIdx = 0;
             currentMessages.forEach(msg => {
                 if (msg.role === "user") {
                     const el = document.createElement("div");
@@ -907,6 +1088,12 @@ async function switchSession(sessionId) {
                     `;
                     stream.appendChild(el);
                 } else if (msg.role === "assistant") {
+                    const log = sessionLogs[assistantIdx] || null;
+                    assistantIdx++;
+                    let logsHtml = "";
+                    if (log) {
+                        logsHtml = '<details class="trace"><summary>View Logs</summary><pre>' + escapeHtml(JSON.stringify(log, null, 2)) + '</pre></details>';
+                    }
                     const el = document.createElement("div");
                     el.className = "message system";
                     el.innerHTML = `
@@ -914,6 +1101,7 @@ async function switchSession(sessionId) {
                         <div class="bubble">
                             <p class="tag">Assistant</p>
                             <p>${marked.parse(msg.content)}</p>
+                            ${logsHtml}
                         </div>
                     `;
                     stream.appendChild(el);
@@ -994,6 +1182,7 @@ async function deleteSession(sessionId) {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
         const data = await res.json();
         if (data.ok) {
+            clearSessionLogs(sessionId);
             if (sessionId === activeSessionId) {
                 startNewSession();
             } else {
