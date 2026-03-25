@@ -8,6 +8,7 @@ from .azure_simulator import (
 from .chat_history import CosmosChatHistoryService, get_chat_history_service
 from .document_store import AzureSearchDocumentStore, get_document_store
 from .llm_service import NvidiaLLMService, get_llm_service, normalize_text_for_tts
+from .request_metrics import DocumentUploadMetricsRecorder, RequestMetricsRecorder
 from .speech_service import AzureSpeechService, get_speech_service
 
 __all__ = [
@@ -16,7 +17,9 @@ __all__ = [
     "AzureSearchDocumentStore",
     "AzureSpeechService",
     "CosmosChatHistoryService",
+    "DocumentUploadMetricsRecorder",
     "NvidiaLLMService",
+    "RequestMetricsRecorder",
     "RAGCostEvaluator",
     "UsageTracker",
     "get_chat_history_service",

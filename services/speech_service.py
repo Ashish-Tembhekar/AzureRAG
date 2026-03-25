@@ -4,6 +4,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from .azure_simulator import AzureCapacityMonitor, AzureQuotaExceededError
+from .request_metrics import RequestMetricsRecorder
 
 load_dotenv()
 
@@ -87,7 +88,11 @@ class AzureSpeechService:
     def get_tts_settings(self) -> dict:
         return dict(self.tts_settings)
 
-    def transcribe_audio(self, file_path: str) -> str:
+    def transcribe_audio(
+        self,
+        file_path: str,
+        metrics_recorder: Optional[RequestMetricsRecorder] = None,
+    ) -> str:
         import logging
 
         logger = logging.getLogger(__name__)
@@ -158,6 +163,12 @@ class AzureSpeechService:
             shutil.rmtree(temp_dir, ignore_errors=True)
         if result.reason == speechsdk.ResultReason.RecognizedSpeech:
             self.capacity_monitor.register_stt_usage(duration)
+            if metrics_recorder is not None:
+                metrics_recorder.record_stt(
+                    audio_file_path=file_path,
+                    input_audio_seconds=duration,
+                    transcript=result.text or "",
+                )
             return result.text
         elif result.reason == speechsdk.ResultReason.NoMatch:
             raise ValueError("Speech not recognized. Please try again.")
@@ -167,7 +178,11 @@ class AzureSpeechService:
         else:
             raise RuntimeError(f"Speech recognition failed: {result.reason}")
 
-    def synthesize_speech(self, text: str) -> bytes:
+    def synthesize_speech(
+        self,
+        text: str,
+        metrics_recorder: Optional[RequestMetricsRecorder] = None,
+    ) -> bytes:
         char_count = self.capacity_monitor.verify_tts_quota(text)
 
         speech_synthesizer = speechsdk.SpeechSynthesizer(
@@ -195,6 +210,8 @@ class AzureSpeechService:
 
         if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
             self.capacity_monitor.register_tts_usage(char_count)
+            if metrics_recorder is not None:
+                metrics_recorder.record_tts(text=text, audio_bytes=result.audio_data)
             return result.audio_data
         elif result.reason == speechsdk.ResultReason.Canceled:
             error_details = getattr(result, "cancellation_details", None)

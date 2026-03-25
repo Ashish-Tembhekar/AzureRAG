@@ -25,6 +25,10 @@ from services import (
     get_rag_cost_evaluator,
     get_speech_service,
 )
+from services.request_metrics import (
+    DocumentUploadMetricsRecorder,
+    RequestMetricsRecorder,
+)
 
 load_dotenv()
 
@@ -158,6 +162,16 @@ def _update_config(payload: Dict[str, Any]) -> None:
         )
 
 
+def _metrics_file_value(metrics_path: Path) -> str:
+    return metrics_path.as_posix()
+
+
+def _estimate_adi_cost_usd(pages: int) -> float:
+    if str(os.getenv("AZURE_TIER", "FREE")).strip().upper() != "BASIC":
+        return 0.0
+    return round((max(int(pages), 0) / 1000.0) * 10.0, 6)
+
+
 @app.get("/")
 def index() -> str:
     return render_template("index.html")
@@ -215,10 +229,20 @@ def upload_document() -> Any:
         or runtime_config.default_index
     )
     temp_path = ""
+    metrics = DocumentUploadMetricsRecorder(
+        endpoint="/api/upload",
+        file_name=uploaded.filename or "uploaded_file",
+        index_name=index_name,
+    )
     try:
         temp_path = _save_uploaded_file(uploaded)
         if not temp_path:
             return jsonify({"ok": False, "error": "Uploaded file is empty."}), 400
+        metrics.update_file(
+            file_path=temp_path,
+            file_size_bytes=os.path.getsize(temp_path),
+            index_name=index_name,
+        )
         chunks, adi_pages = document_store.ingest_document(
             index_name=index_name,
             source_name=uploaded.filename or "uploaded_file",
@@ -226,12 +250,18 @@ def upload_document() -> Any:
             chunk_size=runtime_config.chunk_size,
             overlap=runtime_config.chunk_overlap,
             vector_dimensions=runtime_config.embedding_dimensions,
+            metrics_recorder=metrics,
         )
         if not chunks:
+            metrics_path = metrics.finalize(
+                status="error",
+                error="No valid text chunks were produced. File content appears non-text or extraction failed.",
+            )
             return jsonify(
                 {
                     "ok": False,
                     "error": "No valid text chunks were produced. File content appears non-text or extraction failed.",
+                    "metrics_file": _metrics_file_value(metrics_path),
                 }
             ), 400
         embedding_bytes = len(chunks) * runtime_config.embedding_dimensions * 4
@@ -239,20 +269,46 @@ def upload_document() -> Any:
             embedding_bytes_added=embedding_bytes,
             adi_pages_used=adi_pages,
         )
+        metrics.record_cost_summary(
+            cost_summary=cost_summary,
+            upload_cost_usd=_estimate_adi_cost_usd(adi_pages),
+        )
+        metrics_path = metrics.finalize(status="success")
         return jsonify(
             {
                 "ok": True,
                 "index_name": index_name,
                 "file_name": uploaded.filename,
                 "chunks_ingested": len(chunks),
+                "metrics_file": _metrics_file_value(metrics_path),
                 "cost_summary": cost_summary,
                 "store": document_store.stats(),
             }
         )
     except AzureQuotaExceededError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 429
+        metrics_path = metrics.finalize(status="quota_exceeded", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            429,
+        )
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        metrics_path = metrics.finalize(status="error", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            500,
+        )
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
@@ -326,29 +382,41 @@ def chat() -> Any:
     max_tokens = int(payload.get("max_tokens", runtime_config.chat_max_tokens))
     model = str(payload.get("model", runtime_config.model))
     session_id = payload.get("session_id")
-
-    cosmos_service = get_chat_history_service()
-    if not session_id:
-        session_id = cosmos_service.create_session(user_id="anonymous")
-        logger.info(f"Created new session: {session_id}")
-
-    cosmos_history = cosmos_service.get_session_history(session_id)
-
-    contexts = document_store.search(
-        query=query,
+    metrics = RequestMetricsRecorder(
+        endpoint="/api/chat",
+        session_id=session_id,
         index_name=index_name,
-        top_k=top_k,
-        use_semantic_ranker=use_semantic_ranker,
-        use_vector_search=use_vector_search,
-        vector_dimensions=runtime_config.embedding_dimensions,
+        user_query=query,
     )
-    context_texts = [c.text for c in contexts]
-    context_payload = [
-        {"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text}
-        for c in contexts
-    ]
 
     try:
+        cosmos_service = get_chat_history_service()
+        if not session_id:
+            session_id = cosmos_service.create_session(
+                user_id="anonymous", metrics_recorder=metrics
+            )
+            logger.info(f"Created new session: {session_id}")
+        metrics.update_request(session_id=session_id)
+
+        cosmos_history = cosmos_service.get_session_history(
+            session_id, metrics_recorder=metrics
+        )
+
+        contexts = document_store.search(
+            query=query,
+            index_name=index_name,
+            top_k=top_k,
+            use_semantic_ranker=use_semantic_ranker,
+            use_vector_search=use_vector_search,
+            vector_dimensions=runtime_config.embedding_dimensions,
+            metrics_recorder=metrics,
+        )
+        context_texts = [c.text for c in contexts]
+        context_payload = [
+            {"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text}
+            for c in contexts
+        ]
+
         llm_result = llm_service.generate_rag_answer(
             query=query,
             contexts=context_texts,
@@ -356,6 +424,7 @@ def chat() -> Any:
             temperature=temperature,
             max_tokens=max_tokens,
             chat_history=cosmos_history,
+            metrics_recorder=metrics,
         )
         cost_summary = evaluator.evaluate_query(
             input_tokens=int(llm_result["input_tokens"]),
@@ -363,11 +432,23 @@ def chat() -> Any:
             use_semantic_ranker=use_semantic_ranker,
         )
 
-        cosmos_service.save_message(session_id, "user", query)
-        cosmos_service.save_message(session_id, "assistant", str(llm_result["answer"]))
+        cosmos_service.save_message(
+            session_id, "user", query, metrics_recorder=metrics
+        )
+        cosmos_service.save_message(
+            session_id,
+            "assistant",
+            str(llm_result["answer"]),
+            metrics_recorder=metrics,
+        )
 
         chat_history.clear()
         chat_history.extend(cosmos_history[-20:])
+        metrics.record_response(
+            answer_characters=len(str(llm_result["answer"])),
+            contexts_returned=len(context_payload),
+        )
+        metrics_path = metrics.finalize(status="success")
 
         logger.info(
             f"Chat response: session={session_id}, tokens={llm_result['input_tokens']}+{llm_result['output_tokens']}, "
@@ -386,15 +467,36 @@ def chat() -> Any:
                     "input_tokens": llm_result["input_tokens"],
                     "output_tokens": llm_result["output_tokens"],
                 },
+                "metrics_file": _metrics_file_value(metrics_path),
                 "cost_summary": cost_summary,
             }
         )
     except AzureQuotaExceededError as exc:
         logger.error(f"Quota exceeded: {exc}")
-        return jsonify({"ok": False, "error": str(exc)}), 429
+        metrics_path = metrics.finalize(status="quota_exceeded", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            429,
+        )
     except Exception as exc:
         logger.error(f"Chat error: {exc}", exc_info=True)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        metrics_path = metrics.finalize(status="error", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            500,
+        )
 
 
 @app.post("/api/chat/stream")
@@ -425,26 +527,65 @@ def chat_stream() -> Any:
     max_tokens = int(payload.get("max_tokens", runtime_config.chat_max_tokens))
     model = str(payload.get("model", runtime_config.model))
     session_id = payload.get("session_id")
-
-    cosmos_service = get_chat_history_service()
-    if not session_id:
-        session_id = cosmos_service.create_session(user_id="anonymous")
-
-    cosmos_history = cosmos_service.get_session_history(session_id)
-
-    contexts = document_store.search(
-        query=query,
+    metrics = RequestMetricsRecorder(
+        endpoint="/api/chat/stream",
+        session_id=session_id,
         index_name=index_name,
-        top_k=top_k,
-        use_semantic_ranker=use_semantic_ranker,
-        use_vector_search=use_vector_search,
-        vector_dimensions=runtime_config.embedding_dimensions,
+        user_query=query,
     )
-    context_texts = [c.text for c in contexts]
-    context_payload = [
-        {"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text}
-        for c in contexts
-    ]
+
+    try:
+        cosmos_service = get_chat_history_service()
+        if not session_id:
+            session_id = cosmos_service.create_session(
+                user_id="anonymous", metrics_recorder=metrics
+            )
+        metrics.update_request(session_id=session_id)
+
+        cosmos_history = cosmos_service.get_session_history(
+            session_id, metrics_recorder=metrics
+        )
+
+        contexts = document_store.search(
+            query=query,
+            index_name=index_name,
+            top_k=top_k,
+            use_semantic_ranker=use_semantic_ranker,
+            use_vector_search=use_vector_search,
+            vector_dimensions=runtime_config.embedding_dimensions,
+            metrics_recorder=metrics,
+        )
+        context_texts = [c.text for c in contexts]
+        context_payload = [
+            {"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text}
+            for c in contexts
+        ]
+    except AzureQuotaExceededError as exc:
+        logger.error(f"Stream chat setup quota exceeded: {exc}")
+        metrics_path = metrics.finalize(status="quota_exceeded", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            429,
+        )
+    except Exception as exc:
+        logger.error(f"Stream chat setup error: {exc}", exc_info=True)
+        metrics_path = metrics.finalize(status="error", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            500,
+        )
 
     def generate():
         try:
@@ -455,18 +596,22 @@ def chat_stream() -> Any:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 chat_history=cosmos_history,
+                metrics_recorder=metrics,
             )
 
             full_answer = ""
             token_count = 0
-            for chunk in stream_gen:
+            meta = {}
+            while True:
+                try:
+                    chunk = next(stream_gen)
+                except StopIteration as stop:
+                    if isinstance(stop.value, dict):
+                        meta = stop.value
+                    break
                 full_answer += chunk
                 token_count += 1
                 yield f"data: {json.dumps({'type': 'token', 'token': chunk})}\n\n"
-
-            meta = stream_gen.send(None) if hasattr(stream_gen, "send") else {}
-            if not isinstance(meta, dict):
-                meta = {}
 
             cost_summary = evaluator.evaluate_query(
                 input_tokens=meta.get(
@@ -477,11 +622,20 @@ def chat_stream() -> Any:
                 use_semantic_ranker=use_semantic_ranker,
             )
 
-            cosmos_service.save_message(session_id, "user", query)
-            cosmos_service.save_message(session_id, "assistant", full_answer)
+            cosmos_service.save_message(
+                session_id, "user", query, metrics_recorder=metrics
+            )
+            cosmos_service.save_message(
+                session_id, "assistant", full_answer, metrics_recorder=metrics
+            )
 
             chat_history.clear()
             chat_history.extend(cosmos_history[-20:])
+            metrics.record_response(
+                answer_characters=len(full_answer),
+                contexts_returned=len(context_payload),
+            )
+            metrics_path = metrics.finalize(status="success")
 
             final_data = {
                 "type": "done",
@@ -493,13 +647,15 @@ def chat_stream() -> Any:
                     "input_tokens": meta.get("input_tokens", 0),
                     "output_tokens": meta.get("output_tokens", 0),
                 },
+                "metrics_file": _metrics_file_value(metrics_path),
                 "cost_summary": cost_summary,
             }
             yield f"data: {json.dumps(final_data)}\n\n"
             logger.info(f"Stream chat: session={session_id}, tokens={token_count}")
         except Exception as exc:
             logger.error(f"Stream chat error: {exc}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+            metrics_path = metrics.finalize(status="error", error=str(exc))
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc), 'metrics_file': _metrics_file_value(metrics_path)})}\n\n"
 
     return Response(
         stream_with_context(generate()),
@@ -526,6 +682,7 @@ def voice_chat() -> Any:
         return jsonify({"ok": False, "error": "filename is required"}), 400
 
     temp_audio_path = ""
+    metrics = RequestMetricsRecorder(endpoint="/api/voice-chat")
     try:
         suffix = Path(uploaded_file.filename or "").suffix or ".wav"
         temp_dir = tempfile.mkdtemp()
@@ -544,7 +701,10 @@ def voice_chat() -> Any:
             return jsonify({"ok": False, "error": "Failed to save audio file."}), 500
 
         speech_service = get_speech_service()
-        query = speech_service.transcribe_audio(temp_audio_path)
+        query = speech_service.transcribe_audio(
+            temp_audio_path, metrics_recorder=metrics
+        )
+        metrics.update_request(user_query=query)
 
         index_name = (
             request.form.get("index_name", runtime_config.default_index).strip()
@@ -563,12 +723,18 @@ def voice_chat() -> Any:
         max_tokens = int(request.form.get("max_tokens", runtime_config.chat_max_tokens))
         model = str(request.form.get("model", runtime_config.model))
         session_id = request.form.get("session_id")
+        metrics.update_request(session_id=session_id, index_name=index_name)
 
         cosmos_service = get_chat_history_service()
         if not session_id:
-            session_id = cosmos_service.create_session(user_id="anonymous")
+            session_id = cosmos_service.create_session(
+                user_id="anonymous", metrics_recorder=metrics
+            )
+        metrics.update_request(session_id=session_id)
 
-        cosmos_history = cosmos_service.get_session_history(session_id)
+        cosmos_history = cosmos_service.get_session_history(
+            session_id, metrics_recorder=metrics
+        )
 
         contexts = document_store.search(
             query=query,
@@ -577,6 +743,7 @@ def voice_chat() -> Any:
             use_semantic_ranker=use_semantic_ranker,
             use_vector_search=use_vector_search,
             vector_dimensions=runtime_config.embedding_dimensions,
+            metrics_recorder=metrics,
         )
         context_texts = [c.text for c in contexts]
         context_payload = [
@@ -591,6 +758,7 @@ def voice_chat() -> Any:
             temperature=temperature,
             max_tokens=max_tokens,
             chat_history=cosmos_history,
+            metrics_recorder=metrics,
         )
         cost_summary = evaluator.evaluate_query(
             input_tokens=int(llm_result["input_tokens"]),
@@ -598,15 +766,29 @@ def voice_chat() -> Any:
             use_semantic_ranker=use_semantic_ranker,
         )
 
-        cosmos_service.save_message(session_id, "user", query)
-        cosmos_service.save_message(session_id, "assistant", str(llm_result["answer"]))
+        cosmos_service.save_message(
+            session_id, "user", query, metrics_recorder=metrics
+        )
+        cosmos_service.save_message(
+            session_id,
+            "assistant",
+            str(llm_result["answer"]),
+            metrics_recorder=metrics,
+        )
 
         chat_history.clear()
         chat_history.extend(cosmos_history[-20:])
 
         answer_text = str(llm_result["answer"])
-        tts_audio_data = speech_service.synthesize_speech(answer_text)
+        tts_audio_data = speech_service.synthesize_speech(
+            answer_text, metrics_recorder=metrics
+        )
         tts_audio_base64 = base64.b64encode(tts_audio_data).decode("utf-8")
+        metrics.record_response(
+            answer_characters=len(answer_text),
+            contexts_returned=len(context_payload),
+        )
+        metrics_path = metrics.finalize(status="success")
 
         return jsonify(
             {
@@ -620,13 +802,34 @@ def voice_chat() -> Any:
                     "output_tokens": llm_result["output_tokens"],
                 },
                 "audio": tts_audio_base64,
+                "metrics_file": _metrics_file_value(metrics_path),
                 "cost_summary": cost_summary,
             }
         )
     except AzureQuotaExceededError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 429
+        metrics_path = metrics.finalize(status="quota_exceeded", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            429,
+        )
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        metrics_path = metrics.finalize(status="error", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            500,
+        )
     finally:
         if temp_audio_path:
             temp_dir = os.path.dirname(temp_audio_path)
@@ -661,28 +864,40 @@ def chat_with_tts() -> Any:
     max_tokens = int(payload.get("max_tokens", runtime_config.chat_max_tokens))
     model = str(payload.get("model", runtime_config.model))
     session_id = payload.get("session_id")
-
-    cosmos_service = get_chat_history_service()
-    if not session_id:
-        session_id = cosmos_service.create_session(user_id="anonymous")
-
-    cosmos_history = cosmos_service.get_session_history(session_id)
-
-    contexts = document_store.search(
-        query=query,
+    metrics = RequestMetricsRecorder(
+        endpoint="/api/chat-with-tts",
+        session_id=session_id,
         index_name=index_name,
-        top_k=top_k,
-        use_semantic_ranker=use_semantic_ranker,
-        use_vector_search=use_vector_search,
-        vector_dimensions=runtime_config.embedding_dimensions,
+        user_query=query,
     )
-    context_texts = [c.text for c in contexts]
-    context_payload = [
-        {"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text}
-        for c in contexts
-    ]
 
     try:
+        cosmos_service = get_chat_history_service()
+        if not session_id:
+            session_id = cosmos_service.create_session(
+                user_id="anonymous", metrics_recorder=metrics
+            )
+        metrics.update_request(session_id=session_id)
+
+        cosmos_history = cosmos_service.get_session_history(
+            session_id, metrics_recorder=metrics
+        )
+
+        contexts = document_store.search(
+            query=query,
+            index_name=index_name,
+            top_k=top_k,
+            use_semantic_ranker=use_semantic_ranker,
+            use_vector_search=use_vector_search,
+            vector_dimensions=runtime_config.embedding_dimensions,
+            metrics_recorder=metrics,
+        )
+        context_texts = [c.text for c in contexts]
+        context_payload = [
+            {"chunk_id": c.chunk_id, "source_name": c.source_name, "text": c.text}
+            for c in contexts
+        ]
+
         llm_result = llm_service.generate_rag_answer(
             query=query,
             contexts=context_texts,
@@ -690,6 +905,7 @@ def chat_with_tts() -> Any:
             temperature=temperature,
             max_tokens=max_tokens,
             chat_history=cosmos_history,
+            metrics_recorder=metrics,
         )
         cost_summary = evaluator.evaluate_query(
             input_tokens=int(llm_result["input_tokens"]),
@@ -697,8 +913,15 @@ def chat_with_tts() -> Any:
             use_semantic_ranker=use_semantic_ranker,
         )
 
-        cosmos_service.save_message(session_id, "user", query)
-        cosmos_service.save_message(session_id, "assistant", str(llm_result["answer"]))
+        cosmos_service.save_message(
+            session_id, "user", query, metrics_recorder=metrics
+        )
+        cosmos_service.save_message(
+            session_id,
+            "assistant",
+            str(llm_result["answer"]),
+            metrics_recorder=metrics,
+        )
 
         chat_history.clear()
         chat_history.extend(cosmos_history[-20:])
@@ -706,8 +929,15 @@ def chat_with_tts() -> Any:
         answer_text = str(llm_result["answer"])
 
         speech_service = get_speech_service()
-        tts_audio_data = speech_service.synthesize_speech(answer_text)
+        tts_audio_data = speech_service.synthesize_speech(
+            answer_text, metrics_recorder=metrics
+        )
         tts_audio_base64 = base64.b64encode(tts_audio_data).decode("utf-8")
+        metrics.record_response(
+            answer_characters=len(answer_text),
+            contexts_returned=len(context_payload),
+        )
+        metrics_path = metrics.finalize(status="success")
 
         return jsonify(
             {
@@ -721,13 +951,34 @@ def chat_with_tts() -> Any:
                     "output_tokens": llm_result["output_tokens"],
                 },
                 "audio": tts_audio_base64,
+                "metrics_file": _metrics_file_value(metrics_path),
                 "cost_summary": cost_summary,
             }
         )
     except AzureQuotaExceededError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 429
+        metrics_path = metrics.finalize(status="quota_exceeded", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            429,
+        )
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        metrics_path = metrics.finalize(status="error", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            500,
+        )
 
 
 @app.post("/api/reset")

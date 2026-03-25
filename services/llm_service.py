@@ -4,6 +4,8 @@ from typing import Dict, Generator, List, Optional
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from .request_metrics import RequestMetricsRecorder
+
 load_dotenv()
 
 
@@ -53,6 +55,7 @@ class NvidiaLLMService:
         temperature: float = 0.2,
         max_tokens: int = 600,
         chat_history: Optional[List[Dict[str, str]]] = None,
+        metrics_recorder: Optional[RequestMetricsRecorder] = None,
     ) -> Dict[str, object]:
         selected_model = model or os.getenv(
             "NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"
@@ -98,12 +101,21 @@ class NvidiaLLMService:
         if completion_tokens is None:
             completion_tokens = _estimate_tokens(answer)
 
-        return {
+        result = {
             "answer": answer,
             "input_tokens": int(prompt_tokens),
             "output_tokens": int(completion_tokens),
             "model": selected_model,
         }
+        if metrics_recorder is not None:
+            metrics_recorder.record_llm(
+                model=selected_model,
+                input_tokens=int(prompt_tokens),
+                output_tokens=int(completion_tokens),
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        return result
 
     def stream_rag_answer(
         self,
@@ -113,6 +125,7 @@ class NvidiaLLMService:
         temperature: float = 0.2,
         max_tokens: int = 600,
         chat_history: Optional[List[Dict[str, str]]] = None,
+        metrics_recorder: Optional[RequestMetricsRecorder] = None,
     ) -> Generator[str, None, Dict[str, object]]:
         selected_model = model or os.getenv(
             "NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"
@@ -161,12 +174,21 @@ class NvidiaLLMService:
         input_tokens = _estimate_tokens(" ".join(m["content"] for m in messages))
         output_tokens = _estimate_tokens(full_answer)
 
-        return {
+        result = {
             "answer": full_answer,
             "input_tokens": int(input_tokens),
             "output_tokens": int(output_tokens),
             "model": selected_model,
         }
+        if metrics_recorder is not None:
+            metrics_recorder.record_llm(
+                model=selected_model,
+                input_tokens=int(input_tokens),
+                output_tokens=int(output_tokens),
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        return result
 
 
 _llm_singleton: Optional[NvidiaLLMService] = None

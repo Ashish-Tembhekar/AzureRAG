@@ -32,6 +32,7 @@ from azure.search.documents.models import QueryType, VectorizedQuery
 from dotenv import load_dotenv
 
 from .azure_simulator import AzureCapacityMonitor
+from .request_metrics import DocumentUploadMetricsRecorder, RequestMetricsRecorder
 
 load_dotenv()
 
@@ -473,22 +474,36 @@ class AzureSearchDocumentStore:
         chunk_size: int = 1000,
         overlap: int = 200,
         vector_dimensions: int = 1536,
+        metrics_recorder: Optional[DocumentUploadMetricsRecorder] = None,
     ) -> Tuple[List[ChunkRecord], int]:
         index_name = index_name.strip().lower()
         created = self.ensure_index(index_name=index_name, vector_dimensions=vector_dimensions)
 
         adi_pages = self._capacity_monitor.verify_adi_page_quota(file_path)
+        page_batches: List[str] = []
         if adi_pages <= self.ADI_MAX_PAGES_PER_REQUEST:
+            if adi_pages > 0:
+                page_batches = [f"1-{adi_pages}" if adi_pages > 1 else "1"]
             layout_results = [self._analyze_layout(file_path)]
         else:
+            page_batches = self._page_ranges(
+                adi_pages, self.ADI_MAX_PAGES_PER_REQUEST
+            )
             layout_results = [
                 self._analyze_layout(file_path, pages=page_range)
-                for page_range in self._page_ranges(
-                    adi_pages, self.ADI_MAX_PAGES_PER_REQUEST
-                )
+                for page_range in page_batches
             ]
         layout_result = self._merge_layout_results(layout_results)
         self._capacity_monitor.register_adi_pages(pages=adi_pages, adi_cost_usd=0.0)
+        adi_cost_usd = 0.0
+        if self._capacity_monitor.tier == "BASIC" and adi_pages > 0:
+            adi_cost_usd = (adi_pages / 1000.0) * 10.0
+        if metrics_recorder is not None:
+            metrics_recorder.record_document_intelligence(
+                pages_processed=adi_pages,
+                page_batches=page_batches,
+                cost_usd=adi_cost_usd,
+            )
 
         sections = self._layout_to_sections(layout_result)
         if not sections:
@@ -548,6 +563,23 @@ class AzureSearchDocumentStore:
         failed = [r for r in result if not r.succeeded]
         if failed:
             raise RuntimeError(f"upload_documents failed for {len(failed)} chunks.")
+        if metrics_recorder is not None:
+            metrics_recorder.record_chunking(
+                chunk_size=chunk_size,
+                chunk_overlap=overlap,
+                sections_extracted=len(sections),
+                chunks_created=len(docs),
+                chunk_ids=[str(d["id"]) for d in docs],
+                total_chunk_characters=sum(len(str(d["chunk"])) for d in docs),
+            )
+            metrics_recorder.record_search_upload(
+                index_name=index_name,
+                index_created=created,
+                documents_uploaded=len(docs),
+                vector_dimensions=vector_dimensions,
+                estimated_storage_mb=estimated_storage_mb,
+                upload_batches=1,
+            )
 
         return (
             [
@@ -571,6 +603,7 @@ class AzureSearchDocumentStore:
         use_semantic_ranker: bool = False,
         use_vector_search: bool = True,
         vector_dimensions: int = 1536,
+        metrics_recorder: Optional[RequestMetricsRecorder] = None,
     ) -> List[ChunkRecord]:
         if not index_name:
             raise ValueError("index_name is required for real Azure Search queries.")
@@ -609,6 +642,36 @@ class AzureSearchDocumentStore:
                     text=chunk_text,
                     metadata=item.get("metadata", ""),
                 )
+            )
+        if metrics_recorder is not None:
+            metrics_recorder.record_storage_read(
+                store="azure_search",
+                operation="vector_store_search",
+                item_count=len(payload),
+                details={
+                    "index_name": index_name,
+                    "search_text": query or "*",
+                    "top_k": top_k,
+                    "used_semantic_ranker": use_semantic_ranker,
+                    "used_vector_search": use_vector_search,
+                },
+            )
+            metrics_recorder.record_vector_query(
+                query_text=query,
+                top_k=top_k,
+                used_vector_search=use_vector_search,
+                used_semantic_ranker=use_semantic_ranker,
+                search_text=query or "*",
+                vector_dimensions=vector_dimensions if use_vector_search else 0,
+                results=[
+                    {
+                        "chunk_id": record.chunk_id,
+                        "source_name": record.source_name,
+                        "metadata": record.metadata,
+                        "text_length": len(record.text or ""),
+                    }
+                    for record in payload
+                ],
             )
         return payload
 
