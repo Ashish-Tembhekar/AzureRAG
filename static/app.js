@@ -354,7 +354,9 @@ if (chatBtn) {
         document.getElementById("chatInput").value = "";
         setBusy([chatBtn], true);
         const useStreaming = runtimeConfig?.stream_responses !== false;
-        if (useStreaming) {
+        if (isSpeakerEnabled) {
+            await sendChatWithTts(query);
+        } else if (useStreaming) {
             await sendStreamingChat(query);
         } else {
             await sendNonStreamingChat(query);
@@ -542,6 +544,93 @@ async function sendNonStreamingChat(query) {
         showJson(chatResult, { ok: false, error: err.message || "Chat failed" });
         renderChatResponse(err.message || "Chat failed", "Request failed", null, true);
         setStatus(chatStatusDot, chatStatus, "error", "Chat failed: " + (err.message || "Unknown error"));
+    }
+}
+
+function playAndRenderAudio(audioBase64, streamEl, shouldAutoplay = true) {
+    if (!audioBase64) {
+        return;
+    }
+
+    const audioSrc = "data:audio/wav;base64," + audioBase64;
+    if (shouldAutoplay) {
+        const audio = new Audio(audioSrc);
+        audio.play().catch(e => console.error("[TTS] Play error:", e));
+    }
+
+    if (streamEl) {
+        const audioEl = document.createElement("div");
+        audioEl.className = "message system";
+        audioEl.innerHTML = '<div class="avatar">ðŸ”Š</div><div class="bubble tts-bubble"><p class="tag">Audio Response</p><audio src="' + audioSrc + '" controls></audio></div>';
+        streamEl.appendChild(audioEl);
+        streamEl.scrollTop = streamEl.scrollHeight;
+    }
+}
+
+async function sendChatWithTts(query) {
+    renderPendingChat(query);
+    setStatus(chatStatusDot, chatStatus, "working", "Generating answer and audio...");
+    const payload = {
+        query,
+        index_name: runtimeConfig?.default_index || "default-index",
+        top_k: Number(runtimeConfig?.top_k ?? 4),
+        use_semantic_ranker: Boolean(runtimeConfig?.use_semantic_ranker),
+        session_id: activeSessionId || undefined,
+    };
+    try {
+        const res = await fetch("/api/chat-with-tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            throw new Error("HTTP " + res.status + ": " + res.statusText);
+        }
+
+        const data = await res.json();
+        showJson(chatResult, data);
+        if (!data.ok) {
+            throw new Error(data.error || "Chat with TTS failed");
+        }
+
+        const contexts = Array.isArray(data.contexts) ? data.contexts.length : 0;
+        const modelName = data.model ? " Â· " + data.model : "";
+
+        if (data.session_id && data.session_id !== activeSessionId) {
+            activeSessionId = data.session_id;
+            localStorage.setItem("rag_session_id", data.session_id);
+            loadSessions();
+        }
+
+        currentMessages.push({ role: "user", content: query });
+        currentMessages.push({ role: "assistant", content: data.answer || "" });
+
+        if (data.cost_summary) {
+            saveSessionLogs(data.session_id, data.cost_summary);
+        }
+
+        const stream = getChatStream();
+        if (stream) {
+            const thinking = document.getElementById("chatThinking");
+            if (thinking) thinking.classList.add("hidden");
+            const userEl = document.createElement("div");
+            userEl.className = "message user";
+            userEl.innerHTML = '<div class="bubble user-bubble"><p class="tag">User</p><p>' + escapeHtml(query) + '</p></div><div class="avatar user-avatar">U</div>';
+            stream.appendChild(userEl);
+        }
+
+        appendMessage("assistant", data.answer || "", data.cost_summary);
+
+        const meta = document.getElementById("chatAnswerMeta");
+        if (meta) meta.textContent = contexts + " contexts" + modelName;
+
+        playAndRenderAudio(data.audio, stream, true);
+        setStatus(chatStatusDot, chatStatus, "success", "Answer and audio ready (" + contexts + " contexts)");
+    } catch (err) {
+        console.error("[Chat+TTS] Request error:", err);
+        showJson(chatResult, { ok: false, error: err.message || "Chat with TTS failed" });
+        renderChatResponse(err.message || "Chat with TTS failed", "Request failed", null, true);
+        setStatus(chatStatusDot, chatStatus, "error", "Chat with TTS failed: " + (err.message || "Unknown error"));
     }
 }
 

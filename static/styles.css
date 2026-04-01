@@ -356,6 +356,11 @@ pre {
   gap: 1rem;
 }
 
+.header-link-btn {
+  min-width: 168px;
+  text-align: center;
+}
+
 .icon-btn {
   width: 54px;
   height: 54px;
@@ -936,6 +941,184 @@ pre {
   display: none !important;
 }
 
+.estimator-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.estimator-main {
+  overflow-y: auto;
+  height: calc(100vh - 86px);
+}
+
+.estimator-frame {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  padding: 1.25rem 1rem 2rem;
+}
+
+.estimator-hero {
+  background:
+    linear-gradient(135deg, rgba(17, 17, 17, 0.05), rgba(17, 17, 17, 0)),
+    #ffffff;
+}
+
+.estimator-kicker {
+  margin: 0 0 0.65rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #666666;
+}
+
+.estimator-copy {
+  max-width: 60ch;
+}
+
+.estimator-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.estimator-note {
+  margin-top: 1rem;
+  border: 2px dashed #111111;
+  padding: 0.9rem 1rem;
+  background: #fcfcfa;
+}
+
+.estimator-note strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.estimator-note p {
+  margin: 0;
+  color: #555555;
+  line-height: 1.45;
+}
+
+.estimator-results-panel {
+  min-height: 520px;
+}
+
+.estimator-empty {
+  min-height: 100%;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: #666666;
+  padding: 2rem;
+  border: 2px dashed #111111;
+}
+
+.estimator-empty h2 {
+  margin: 0 0 0.5rem;
+}
+
+.estimator-empty p {
+  margin: 0;
+  max-width: 42ch;
+}
+
+.estimator-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.estimator-summary h2 {
+  font-size: 2.6rem;
+  margin: 0;
+}
+
+.estimator-badge {
+  border: 2px solid #111111;
+  padding: 0.65rem 0.8rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  max-width: 260px;
+  background: #f0f0ed;
+}
+
+.estimator-service-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.estimator-service-card {
+  border: 2px solid #111111;
+  background: #ffffff;
+  padding: 1rem 1.05rem;
+}
+
+.estimator-service-card h3 {
+  margin: 0 0 0.8rem;
+  font-size: 1.65rem;
+}
+
+.estimator-service-copy {
+  color: #555555;
+  line-height: 1.45;
+}
+
+.estimator-service-copy p {
+  margin: 0.3rem 0;
+}
+
+.estimator-table-card {
+  margin-top: 1rem;
+  border: 2px solid #111111;
+  background: #ffffff;
+}
+
+.estimator-table-header {
+  padding: 1rem 1rem 0.8rem;
+  border-bottom: 2px solid #111111;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.estimator-table-header h3 {
+  margin: 0;
+}
+
+.estimator-table-wrap {
+  overflow-x: auto;
+}
+
+.estimator-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.estimator-table th,
+.estimator-table td {
+  padding: 0.8rem 0.9rem;
+  border-bottom: 1px solid #111111;
+  text-align: left;
+}
+
+.estimator-table th {
+  background: #f7f7f4;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.7rem;
+}
+
+.estimator-table tr:last-child td {
+  border-bottom: none;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -981,6 +1164,20 @@ pre {
 
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .estimator-grid,
+  .estimator-service-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .estimator-summary,
+  .estimator-table-header {
+    flex-direction: column;
+  }
+
+  .header-link-btn {
+    min-width: 0;
   }
 
   .trace-inline {

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Azure RAG Cost Estimator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="theme-shell">
+  <div class="estimator-shell">
+    <header class="chat-header">
+      <div class="header-inner">
+        <div>
+          <p class="overline">Cost Estimator</p>
+          <h1>Azure RAG</h1>
+        </div>
+        <div class="header-actions">
+          <a class="btn-ghost" href="/settings">Settings</a>
+          <a class="btn-ghost" href="/">Back to Chat</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="estimator-main">
+      <div class="estimator-frame">
+        <section class="panel-block estimator-hero">
+          <p class="estimator-kicker">Request Cost Explorer</p>
+          <h2>Reprice any recorded request against a selected LLM</h2>
+          <p class="panel-copy estimator-copy">
+            Pick a metrics entry by its recorded user query, choose the LLM pricing profile to apply, and review the per-service cost breakdown. Token counts always come from the selected request file.
+          </p>
+        </section>
+
+        <div class="estimator-grid">
+          <section class="panel-block">
+            <div class="status-bar compact">
+              <span id="estimatorStatusDot" class="status-dot idle" aria-hidden="true"></span>
+              <span id="estimatorStatus" class="status-text">Idle</span>
+            </div>
+            <h2>Estimator Inputs</h2>
+            <form id="costEstimatorForm" class="stack">
+              <label for="estimatorModel">LLM Pricing Profile</label>
+              <select id="estimatorModel"></select>
+
+              <label for="estimatorRequest">Request Metrics</label>
+              <select id="estimatorRequest"></select>
+
+              <button type="submit" class="btn-primary">Estimate Cost</button>
+            </form>
+            <div class="estimator-note">
+              <strong>Override Rule</strong>
+              <p>If the metrics file was recorded with a different model, the estimator still uses only that file’s token counts and applies the selected model’s input and output pricing.</p>
+            </div>
+          </section>
+
+          <section class="panel-block estimator-results-panel">
+            <div id="estimatorEmptyState" class="estimator-empty">
+              <h2>Choose a request to begin</h2>
+              <p>The result panel will show total cost, service-level costs, and token-based pricing details.</p>
+            </div>
+
+            <div id="estimatorResult" class="hidden">
+              <div class="estimator-summary">
+                <div>
+                  <p class="overline">Estimated Total</p>
+                  <h2 id="estimateTotalCost">$0.000000</h2>
+                  <p id="estimateSecondaryTotal" class="doc-meta"></p>
+                  <p id="estimateSummaryMeta" class="panel-copy estimator-copy"></p>
+                </div>
+                <div id="estimateOverrideBadge" class="estimator-badge hidden">Selected pricing overrides recorded model pricing</div>
+              </div>
+
+              <div class="estimator-service-grid" id="estimateServices"></div>
+
+              <section class="estimator-table-card">
+                <div class="estimator-table-header">
+                  <h3>Cost Breakdown</h3>
+                  <p id="estimateRequestMeta" class="doc-meta"></p>
+                </div>
+                <div class="estimator-table-wrap">
+                  <table class="estimator-table">
+                    <thead>
+                      <tr>
+                        <th>Component</th>
+                        <th>Units</th>
+                        <th>Rate</th>
+                        <th>Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody id="estimateBreakdownBody"></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='cost-estimator.js') }}"></script>
+</body>
+</html>

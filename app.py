@@ -1,18 +1,11 @@
-import os
-import tempfile
-from pathlib import Path
-from dataclasses import dataclass
-from typing import Any, Dict, List
-
-from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
-
 import base64
+import json
 import os
 import tempfile
-from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
@@ -66,6 +59,131 @@ class RuntimeConfig:
 
 runtime_config = RuntimeConfig()
 chat_history: List[Dict[str, str]] = []
+REQUEST_METRICS_DIR = Path("request_metrics")
+SPEECH_STT_COST_PER_HOUR_USD = 1.00
+SPEECH_TTS_COST_PER_MILLION_CHARS_USD = 15.00
+COSMOS_REQUEST_UNIT_COST_PER_100_UNITS_USD = 0.0
+AZURE_SEARCH_BASIC_PRICE_PER_SU_MONTH_INR = 6706.12
+DEFAULT_AZURE_SEARCH_UNITS = 1
+SECONDS_PER_30_DAY_MONTH = 30 * 24 * 60 * 60
+SPEECH_STT_REALTIME_PRICE_PER_HOUR_INR = 90.956
+SPEECH_TTS_NEURAL_PRICE_PER_MILLION_CHARS_INR = 1364.326
+LLM_PRICING_OPTIONS: List[Dict[str, Any]] = [
+    {
+        "id": "openai/gpt-oss-20b",
+        "label": "GPT-OSS 20B",
+        "input_per_1k_tokens_usd": 0.00015,
+        "output_per_1k_tokens_usd": 0.00060,
+    },
+    {
+        "id": "openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "input_per_1k_tokens_usd": 0.0009,
+        "output_per_1k_tokens_usd": 0.0036,
+    },
+    {
+        "id": "meta/llama-3.1-8b-instruct",
+        "label": "Llama 3.1 8B Instruct",
+        "input_per_1k_tokens_usd": 0.00012,
+        "output_per_1k_tokens_usd": 0.00024,
+    },
+    {
+        "id": "meta/llama-3.3-70b-instruct",
+        "label": "Llama 3.3 70B Instruct",
+        "input_per_1k_tokens_usd": 0.00059,
+        "output_per_1k_tokens_usd": 0.00079,
+    },
+    {
+    "id": "openai/gpt-5.4",
+    "label": "GPT-5.4",
+    "input_per_1k_tokens_usd": 0.0025,
+    "output_per_1k_tokens_usd": 0.015,
+    },
+    {
+        "id": "openai/gpt-5.4-mini",
+        "label": "GPT-5.4 Mini",
+        "input_per_1k_tokens_usd": 0.00075,
+        "output_per_1k_tokens_usd": 0.0045,
+    },
+    {
+        "id": "openai/gpt-5.4-nano",
+        "label": "GPT-5.4 Nano",
+        "input_per_1k_tokens_usd": 0.0002,
+        "output_per_1k_tokens_usd": 0.00125,
+    },
+    {
+        "id": "openai/gpt-5",
+        "label": "GPT-5",
+        "input_per_1k_tokens_usd": 0.00125,
+        "output_per_1k_tokens_usd": 0.01,
+    },
+    {
+        "id": "openai/gpt-5-mini",
+        "label": "GPT-5 Mini",
+        "input_per_1k_tokens_usd": 0.00025,
+        "output_per_1k_tokens_usd": 0.002,
+    },
+    {
+        "id": "openai/gpt-4o",
+        "label": "GPT-4o",
+        "input_per_1k_tokens_usd": 0.0025,
+        "output_per_1k_tokens_usd": 0.01,
+    },
+    {
+        "id": "openai/gpt-4o-mini",
+        "label": "GPT-4o Mini",
+        "input_per_1k_tokens_usd": 0.00015,
+        "output_per_1k_tokens_usd": 0.0006,
+    },
+    {
+        "id": "google/gemini-3.1-pro-preview",
+        "label": "Gemini 3.1 Pro Preview",
+        "input_per_1k_tokens_usd": 0.002,
+        "output_per_1k_tokens_usd": 0.012,
+    },
+    {
+        "id": "google/gemini-3-flash",
+        "label": "Gemini 3 Flash",
+        "input_per_1k_tokens_usd": 0.0005,
+        "output_per_1k_tokens_usd": 0.003,
+    },
+    {
+        "id": "google/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro",
+        "input_per_1k_tokens_usd": 0.00125,
+        "output_per_1k_tokens_usd": 0.01,
+    },
+    {
+        "id": "google/gemini-2.5-flash",
+        "label": "Gemini 2.5 Flash",
+        "input_per_1k_tokens_usd": 0.0003,
+        "output_per_1k_tokens_usd": 0.0025,
+    },
+    {
+        "id": "google/gemini-2.5-flash-lite",
+        "label": "Gemini 2.5 Flash-Lite",
+        "input_per_1k_tokens_usd": 0.0001,
+        "output_per_1k_tokens_usd": 0.0004,
+    },
+    {
+        "id": "anthropic/claude-opus-4.6",
+        "label": "Claude Opus 4.6",
+        "input_per_1k_tokens_usd": 0.005,
+        "output_per_1k_tokens_usd": 0.025,
+    },
+    {
+        "id": "anthropic/claude-sonnet-4.6",
+        "label": "Claude Sonnet 4.6",
+        "input_per_1k_tokens_usd": 0.003,
+        "output_per_1k_tokens_usd": 0.015,
+    },
+    {
+        "id": "anthropic/claude-haiku-4.5",
+        "label": "Claude Haiku 4.5",
+        "input_per_1k_tokens_usd": 0.001,
+        "output_per_1k_tokens_usd": 0.005,
+    }
+]
 
 app = Flask(__name__)
 document_store = get_document_store()
@@ -172,6 +290,323 @@ def _estimate_adi_cost_usd(pages: int) -> float:
     return round((max(int(pages), 0) / 1000.0) * 10.0, 6)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_metrics_label(metrics: Dict[str, Any], fallback: str) -> str:
+    query = str(metrics.get("user_query") or "").strip()
+    return query or fallback
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _load_metrics_payload(metrics_name: str) -> Dict[str, Any]:
+    safe_name = Path(metrics_name).name
+    metrics_path = REQUEST_METRICS_DIR / safe_name
+    if not metrics_path.exists() or metrics_path.suffix.lower() != ".json":
+        raise FileNotFoundError(f"Metrics file '{safe_name}' was not found.")
+    return json.loads(metrics_path.read_text(encoding="utf-8"))
+
+
+def _list_request_metrics() -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    if not REQUEST_METRICS_DIR.exists():
+        return items
+
+    for metrics_path in sorted(REQUEST_METRICS_DIR.glob("*.json"), reverse=True):
+        try:
+            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict) or "llm" not in payload:
+            continue
+        llm_payload = payload.get("llm") or {}
+        items.append(
+            {
+                "file_name": metrics_path.name,
+                "label": _format_metrics_label(payload, metrics_path.name),
+                "user_query": payload.get("user_query"),
+                "recorded_model": llm_payload.get("model"),
+                "input_tokens": _safe_int(llm_payload.get("input_tokens")),
+                "output_tokens": _safe_int(llm_payload.get("output_tokens")),
+                "status": payload.get("status"),
+                "started_at": payload.get("started_at"),
+                "finished_at": payload.get("finished_at"),
+            }
+        )
+    return items
+
+
+def _get_llm_pricing_options() -> List[Dict[str, Any]]:
+    options = [dict(item) for item in LLM_PRICING_OPTIONS]
+    known_ids = {item["id"] for item in options}
+    runtime_model_id = str(runtime_config.model or "").strip()
+    if runtime_model_id and runtime_model_id not in known_ids:
+        options.insert(
+            0,
+            {
+                "id": runtime_model_id,
+                "label": f"{runtime_model_id} (Configured Runtime)",
+                "input_per_1k_tokens_usd": _safe_float(
+                    os.getenv("AZURE_LLM_INPUT_COST_PER_1K", "0.00015"), 0.00015
+                ),
+                "output_per_1k_tokens_usd": _safe_float(
+                    os.getenv("AZURE_LLM_OUTPUT_COST_PER_1K", "0.00060"), 0.00060
+                ),
+            },
+        )
+    return options
+
+
+def _resolve_llm_pricing(model_id: str) -> Dict[str, Any]:
+    selected_id = str(model_id or "").strip()
+    for option in _get_llm_pricing_options():
+        if option["id"] == selected_id:
+            return option
+    raise ValueError(f"Unsupported model '{selected_id}'.")
+
+
+def _estimate_request_cost(metrics: Dict[str, Any], selected_model_id: str) -> Dict[str, Any]:
+    llm_payload = metrics.get("llm") or {}
+    vector_store = metrics.get("vector_store") or {}
+    speech = metrics.get("speech") or {}
+    storage = metrics.get("storage") or {}
+    stt = speech.get("stt") or {}
+    tts = speech.get("tts") or {}
+    tier = str(os.getenv("AZURE_TIER", "FREE")).strip().upper()
+    selected_pricing = _resolve_llm_pricing(selected_model_id)
+    started_at = _parse_iso_datetime(metrics.get("started_at"))
+    finished_at = _parse_iso_datetime(metrics.get("finished_at"))
+
+    input_tokens = _safe_int(llm_payload.get("input_tokens"))
+    output_tokens = _safe_int(llm_payload.get("output_tokens"))
+    semantic_queries = _safe_int(vector_store.get("semantic_query_count"))
+    used_semantic_ranker = bool(vector_store.get("used_semantic_ranker"))
+    result_chunks = vector_store.get("result_chunks") or []
+    retrieved_text_length = sum(
+        _safe_int(chunk.get("text_length"))
+        for chunk in result_chunks
+        if isinstance(chunk, dict)
+    )
+    request_duration_seconds = 0.0
+    if started_at and finished_at:
+        request_duration_seconds = max(
+            (finished_at - started_at).total_seconds(),
+            0.0,
+        )
+
+    llm_input_cost = (
+        input_tokens / 1000.0
+    ) * _safe_float(selected_pricing.get("input_per_1k_tokens_usd"))
+    llm_output_cost = (
+        output_tokens / 1000.0
+    ) * _safe_float(selected_pricing.get("output_per_1k_tokens_usd"))
+    llm_cost = llm_input_cost + llm_output_cost
+
+    semantic_unit_cost = _safe_float(os.getenv("AZURE_SEMANTIC_QUERY_COST", "0.001"), 0.001)
+    semantic_cost = semantic_queries * semantic_unit_cost if used_semantic_ranker else 0.0
+    azure_search_compute_cost_inr = (
+        (
+            AZURE_SEARCH_BASIC_PRICE_PER_SU_MONTH_INR
+            * DEFAULT_AZURE_SEARCH_UNITS
+        )
+        / float(SECONDS_PER_30_DAY_MONTH)
+    ) * request_duration_seconds
+
+    stt_seconds = _safe_float(stt.get("input_audio_seconds"))
+    tts_characters = _safe_int(tts.get("input_characters"))
+    stt_cost = (
+        (stt_seconds / 3600.0) * SPEECH_STT_COST_PER_HOUR_USD if tier == "BASIC" else 0.0
+    )
+    tts_cost = (
+        (tts_characters / 1_000_000.0) * SPEECH_TTS_COST_PER_MILLION_CHARS_USD
+        if tier == "BASIC"
+        else 0.0
+    )
+    stt_cost_inr = (
+        (stt_seconds / 3600.0) * SPEECH_STT_REALTIME_PRICE_PER_HOUR_INR
+    )
+    tts_cost_inr = (
+        (tts_characters / 1_000_000.0) * SPEECH_TTS_NEURAL_PRICE_PER_MILLION_CHARS_INR
+    )
+    speech_cost = stt_cost + tts_cost
+    speech_cost_inr = stt_cost_inr + tts_cost_inr
+
+    read_operations = storage.get("read_operations") or []
+    write_operations = storage.get("write_operations") or []
+    cosmos_request_units = 0.0
+    cosmos_bytes_written = 0
+    for operation in [*read_operations, *write_operations]:
+        if operation.get("store") != "cosmos":
+            continue
+        cosmos_request_units += _safe_float(operation.get("request_charge"))
+        cosmos_bytes_written += _safe_int(operation.get("bytes_written"))
+    cosmos_cost = (
+        (cosmos_request_units / 100.0) * COSMOS_REQUEST_UNIT_COST_PER_100_UNITS_USD
+        if cosmos_request_units > 0
+        else 0.0
+    )
+
+    total_cost = llm_cost + semantic_cost + speech_cost + cosmos_cost
+    return {
+        "metrics_file": metrics.get("_file_name"),
+        "user_query": metrics.get("user_query"),
+        "status": metrics.get("status"),
+        "recorded_model": llm_payload.get("model"),
+        "selected_model": selected_pricing["id"],
+        "pricing_override_applied": selected_pricing["id"] != llm_payload.get("model"),
+        "started_at": metrics.get("started_at"),
+        "finished_at": metrics.get("finished_at"),
+        "request_duration_seconds": round(request_duration_seconds, 3),
+        "total_cost_usd": round(total_cost, 6),
+        "total_cost_inr": round(azure_search_compute_cost_inr + speech_cost_inr, 6),
+        "services": [
+            {
+                "key": "llm",
+                "label": "LLM",
+                "cost_usd": round(llm_cost, 6),
+                "details": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "input_cost_usd": round(llm_input_cost, 6),
+                    "output_cost_usd": round(llm_output_cost, 6),
+                    "input_per_1k_tokens_usd": _safe_float(
+                        selected_pricing.get("input_per_1k_tokens_usd")
+                    ),
+                    "output_per_1k_tokens_usd": _safe_float(
+                        selected_pricing.get("output_per_1k_tokens_usd")
+                    ),
+                    "priced_model": selected_pricing["id"],
+                    "recorded_model": llm_payload.get("model"),
+                },
+            },
+            {
+                "key": "azure_search",
+                "label": "Azure AI Search",
+                "cost_usd": round(semantic_cost, 6),
+                "cost_inr": round(azure_search_compute_cost_inr, 6),
+                "details": {
+                    "used_vector_search": bool(vector_store.get("used_vector_search")),
+                    "used_semantic_ranker": used_semantic_ranker,
+                    "semantic_query_count": semantic_queries,
+                    "semantic_query_cost_usd": semantic_unit_cost,
+                    "semantic_cost_usd": round(semantic_cost, 6),
+                    "results_returned": _safe_int(vector_store.get("results_returned")),
+                    "vector_dimensions": _safe_int(vector_store.get("vector_dimensions")),
+                    "retrieved_text_length": retrieved_text_length,
+                    "result_chunk_count": len(result_chunks),
+                    "request_duration_seconds": round(request_duration_seconds, 3),
+                    "basic_tier_assumed": True,
+                    "search_units": DEFAULT_AZURE_SEARCH_UNITS,
+                    "basic_price_per_su_month_inr": AZURE_SEARCH_BASIC_PRICE_PER_SU_MONTH_INR,
+                    "search_compute_cost_inr": round(azure_search_compute_cost_inr, 6),
+                },
+            },
+            {
+                "key": "speech",
+                "label": "Speech",
+                "cost_usd": round(speech_cost, 6),
+                "cost_inr": round(speech_cost_inr, 6),
+                "details": {
+                    "tier": tier,
+                    "stt_seconds": round(stt_seconds, 3),
+                    "tts_characters": tts_characters,
+                    "stt_cost_usd": round(stt_cost, 6),
+                    "tts_cost_usd": round(tts_cost, 6),
+                    "stt_cost_inr": round(stt_cost_inr, 6),
+                    "tts_cost_inr": round(tts_cost_inr, 6),
+                    "stt_cost_per_hour_usd": SPEECH_STT_COST_PER_HOUR_USD,
+                    "tts_cost_per_million_chars_usd": SPEECH_TTS_COST_PER_MILLION_CHARS_USD,
+                    "stt_realtime_price_per_hour_inr": SPEECH_STT_REALTIME_PRICE_PER_HOUR_INR,
+                    "tts_neural_price_per_million_chars_inr": SPEECH_TTS_NEURAL_PRICE_PER_MILLION_CHARS_INR,
+                    "payg_pricing_assumed": True,
+                },
+            },
+            {
+                "key": "cosmos",
+                "label": "Cosmos DB",
+                "cost_usd": round(cosmos_cost, 6),
+                "details": {
+                    "request_units": round(cosmos_request_units, 4),
+                    "bytes_written": cosmos_bytes_written,
+                    "read_operations": _safe_int(storage.get("reads")),
+                    "write_operations": _safe_int(storage.get("writes")),
+                    "pricing_note": "Current estimator exposes Cosmos telemetry and any mapped RU cost configuration.",
+                },
+            },
+        ],
+        "breakdown": [
+            {
+                "label": "LLM input tokens",
+                "units": input_tokens,
+                "rate": _safe_float(selected_pricing.get("input_per_1k_tokens_usd")),
+                "cost_usd": round(llm_input_cost, 6),
+            },
+            {
+                "label": "LLM output tokens",
+                "units": output_tokens,
+                "rate": _safe_float(selected_pricing.get("output_per_1k_tokens_usd")),
+                "cost_usd": round(llm_output_cost, 6),
+            },
+            {
+                "label": "Azure AI Search compute time",
+                "units": round(request_duration_seconds, 3),
+                "rate": round(
+                    (
+                        AZURE_SEARCH_BASIC_PRICE_PER_SU_MONTH_INR
+                        * DEFAULT_AZURE_SEARCH_UNITS
+                    )
+                    / float(SECONDS_PER_30_DAY_MONTH),
+                    9,
+                ),
+                "cost_usd": 0.0,
+                "cost_inr": round(azure_search_compute_cost_inr, 6),
+                "currency": "INR",
+            },
+            {
+                "label": "Semantic ranker queries",
+                "units": semantic_queries if used_semantic_ranker else 0,
+                "rate": semantic_unit_cost,
+                "cost_usd": round(semantic_cost, 6),
+            },
+            {
+                "label": "Speech to text seconds",
+                "units": round(stt_seconds, 3),
+                "rate": SPEECH_STT_COST_PER_HOUR_USD,
+                "cost_usd": round(stt_cost, 6),
+                "cost_inr": round(stt_cost_inr, 6),
+                "currency": "INR",
+            },
+            {
+                "label": "Text to speech characters",
+                "units": tts_characters,
+                "rate": SPEECH_TTS_COST_PER_MILLION_CHARS_USD,
+                "cost_usd": round(tts_cost, 6),
+                "cost_inr": round(tts_cost_inr, 6),
+                "currency": "INR",
+            },
+        ],
+    }
+
+
 @app.get("/")
 def index() -> str:
     return render_template("index.html")
@@ -190,6 +625,50 @@ def secure_context_help() -> str:
 @app.get("/settings")
 def settings() -> str:
     return render_template("settings.html")
+
+
+@app.get("/cost-estimator")
+def cost_estimator() -> str:
+    return render_template("cost-estimator.html")
+
+
+@app.get("/api/cost-estimator/data")
+def get_cost_estimator_data() -> Any:
+    return jsonify(
+        {
+            "ok": True,
+            "models": _get_llm_pricing_options(),
+            "requests": _list_request_metrics(),
+            "default_model": runtime_config.model,
+            "azure_tier": str(os.getenv("AZURE_TIER", "FREE")).strip().upper(),
+            "semantic_query_cost_usd": _safe_float(
+                os.getenv("AZURE_SEMANTIC_QUERY_COST", "0.001"), 0.001
+            ),
+        }
+    )
+
+
+@app.post("/api/cost-estimator/estimate")
+def estimate_cost() -> Any:
+    payload = request.get_json(silent=True) or {}
+    metrics_name = str(payload.get("metrics_file") or "").strip()
+    selected_model = str(payload.get("model") or "").strip()
+    if not metrics_name:
+        return jsonify({"ok": False, "error": "metrics_file is required"}), 400
+    if not selected_model:
+        return jsonify({"ok": False, "error": "model is required"}), 400
+
+    try:
+        metrics = _load_metrics_payload(metrics_name)
+        metrics["_file_name"] = Path(metrics_name).name
+        estimate = _estimate_request_cost(metrics, selected_model)
+        return jsonify({"ok": True, "estimate": estimate})
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.get("/api/health")
@@ -1050,15 +1529,48 @@ def generate_tts() -> Any:
     text = payload.get("text", "")
     if not text:
         return jsonify({"ok": False, "error": "text is required"}), 400
+    metrics = RequestMetricsRecorder(
+        endpoint="/api/tts-generate",
+        user_query=(str(text).strip()[:120] or "tts-generate"),
+    )
     try:
         speech_service = get_speech_service()
-        audio_data = speech_service.synthesize_speech(text)
+        audio_data = speech_service.synthesize_speech(
+            text, metrics_recorder=metrics
+        )
         audio_base64 = base64.b64encode(audio_data).decode("utf-8")
-        return jsonify({"ok": True, "audio": audio_base64})
+        metrics_path = metrics.finalize(status="success")
+        return jsonify(
+            {
+                "ok": True,
+                "audio": audio_base64,
+                "metrics_file": _metrics_file_value(metrics_path),
+            }
+        )
     except AzureQuotaExceededError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 429
+        metrics_path = metrics.finalize(status="quota_exceeded", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            429,
+        )
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        metrics_path = metrics.finalize(status="error", error=str(exc))
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "metrics_file": _metrics_file_value(metrics_path),
+                }
+            ),
+            500,
+        )
 
 
 @app.get("/api/sessions")

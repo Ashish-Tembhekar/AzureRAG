@@ -15,7 +15,7 @@
     <header class="chat-header">
       <div class="header-inner">
         <div class="header-left">
-          <button id="sidebarToggleBtn" class="icon-btn sidebar-toggle-btn" aria-label="Toggle chat history" title="Chat History">☰</button>
+          <button id="sidebarToggleBtn" class="icon-btn sidebar-toggle-btn" aria-label="Toggle chat history" title="Chat History">&#9776;</button>
           <div class="header-title-area">
             <p class="overline" id="activeSessionLabel">Active Thread</p>
             <h1>Azure RAG</h1>
@@ -26,7 +26,8 @@
             <span id="chatStatusDot" class="status-dot idle" aria-hidden="true"></span>
             <span id="chatStatus" class="status-text">Idle</span>
           </div>
-          <a class="icon-btn" href="/settings" aria-label="Open settings">⚙</a>
+          <a class="btn-ghost header-link-btn" href="/cost-estimator">Cost Estimator</a>
+          <a class="icon-btn" href="/settings" aria-label="Open settings">&#9881;</a>
         </div>
       </div>
     </header>
@@ -70,32 +71,32 @@
           <p class="thinking-text">Thinking ...</p>
         </div>
 
-<div id="chatAnswerCard" class="message system hidden">
-<div class="avatar">AI</div>
-<div class="bubble">
-<p class="tag">Assistant</p>
-<p id="chatAnswerText"></p>
-<p id="chatAnswerMeta" class="bubble-meta"></p>
-<div id="chatAnswerAudioContainer" class="tts-audio-container hidden"></div>
-</div>
-</div>
-</div>
+        <div id="chatAnswerCard" class="message system hidden">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            <p class="tag">Assistant</p>
+            <p id="chatAnswerText"></p>
+            <p id="chatAnswerMeta" class="bubble-meta"></p>
+            <div id="chatAnswerAudioContainer" class="tts-audio-container hidden"></div>
+          </div>
+        </div>
+      </div>
 
-<footer class="chat-composer">
-<div class="composer-box">
-<label class="sr-only" for="chatInput">Message</label>
-<textarea id="chatInput" rows="4" placeholder="Type a message ..."></textarea>
-<div class="composer-controls">
-<button id="speakerToggleBtn" type="button" class="speaker-toggle-btn" aria-label="Toggle TTS" title="Enable audio responses">🔊</button>
-<button id="voiceToggleBtn" type="button" class="voice-toggle-btn" aria-label="Toggle voice mode" title="Toggle voice mode">🎤</button>
-<button id="recordBtn" type="button" class="record-btn hidden" aria-label="Record voice" title="Record voice">🔴</button>
-<button id="chatBtn" type="button" class="send-btn" aria-label="Send message">➤</button>
-</div>
-</div>
-</footer>
-</section>
-</main>
+      <footer class="chat-composer">
+        <div class="composer-box">
+          <label class="sr-only" for="chatInput">Message</label>
+          <textarea id="chatInput" rows="4" placeholder="Type a message ..."></textarea>
+          <div class="composer-controls">
+            <button id="speakerToggleBtn" type="button" class="speaker-toggle-btn" aria-label="Toggle TTS" title="Enable audio responses">&#128266;</button>
+            <button id="voiceToggleBtn" type="button" class="voice-toggle-btn" aria-label="Toggle voice mode" title="Toggle voice mode">&#127908;</button>
+            <button id="recordBtn" type="button" class="record-btn hidden" aria-label="Record voice" title="Record voice">&#128308;</button>
+            <button id="chatBtn" type="button" class="send-btn" aria-label="Send message">&#10148;</button>
+          </div>
+        </div>
+      </footer>
+    </section>
+  </main>
 
-<script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
